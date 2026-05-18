@@ -1,9 +1,9 @@
 [package]
 name = "LocalDeck"
-version = "0.3.1-CA"
+version = "0.3.1"
 description = "Kanban. Local. Secure. Private."
 authors = ["Anthony Nunez"]
-license = GNU General Public License v3.0"
+license = "GNU General Public License v3.0"
 repository = "https://github.com/CafecitoExpress95/LocalDeck"
 edition = "2026"
 rust-version = "1.77.2"
