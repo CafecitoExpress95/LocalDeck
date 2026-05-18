@@ -858,6 +858,75 @@ p {
 	align-items: stretch;
 }
 
+.checklist-list,
+.checklist-items {
+	display: grid;
+	gap: 8px;
+	min-width: 0;
+}
+
+.checklist-list.compact {
+	gap: 10px;
+}
+
+.checklist-editor {
+	display: grid;
+	gap: 10px;
+	min-width: 0;
+	border: 1px solid rgba(99, 109, 130, 0.16);
+	border-radius: 8px;
+	background: var(--ld-white);
+	padding: 12px;
+}
+
+.dialog-section .checklist-editor {
+	background: var(--ld-panel);
+}
+
+.checklist-heading {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 8px;
+	align-items: center;
+	min-width: 0;
+}
+
+.checklist-item-row {
+	display: grid;
+	grid-template-columns: 22px minmax(0, 1fr) auto;
+	gap: 8px;
+	align-items: center;
+	min-width: 0;
+	padding-left: calc(var(--item-depth, 0) * 18px);
+}
+
+.checklist-item-row > input[type='checkbox'] {
+	width: 18px;
+	height: 18px;
+}
+
+.checklist-item-row > input[type='text'],
+.checklist-item-row > input:not([type]) {
+	min-height: 36px;
+	background: var(--ld-white);
+}
+
+.checklist-item-row .checked-item {
+	color: var(--ld-gray);
+	text-decoration: line-through;
+}
+
+.checklist-item-actions {
+	display: flex;
+	gap: 4px;
+	align-items: center;
+}
+
+.checklist-item-actions .icon-button {
+	width: 30px;
+	height: 30px;
+}
+
 .custom-field-heading {
 	justify-content: space-between;
 	color: var(--ld-shadow);

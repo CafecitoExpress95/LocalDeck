@@ -342,6 +342,7 @@ export async function updateCard(
 			| 'templateState'
 			| 'labelIds'
 			| 'dates'
+			| 'checklists'
 			| 'customFields'
 			| 'customFieldOrder'
 		>
@@ -358,6 +359,7 @@ export async function updateCard(
 	if (changes.templateState !== undefined) update.templateState = changes.templateState;
 	if (changes.labelIds !== undefined) update.labelIds = changes.labelIds;
 	if (changes.dates !== undefined) update.dates = changes.dates;
+	if (changes.checklists !== undefined) update.checklists = changes.checklists;
 	if (changes.customFields !== undefined) update.customFields = changes.customFields;
 	if (changes.customFieldOrder !== undefined) update.customFieldOrder = changes.customFieldOrder;
 
@@ -477,7 +479,13 @@ export async function updateTemplate(
 	changes: Partial<
 		Pick<
 			CardTemplateRecord,
-			'name' | 'descriptionMarkdown' | 'labelIds' | 'dates' | 'customFields' | 'customFieldOrder'
+			| 'name'
+			| 'descriptionMarkdown'
+			| 'labelIds'
+			| 'dates'
+			| 'checklists'
+			| 'customFields'
+			| 'customFieldOrder'
 		>
 	>
 ) {
@@ -491,6 +499,7 @@ export async function updateTemplate(
 		update.descriptionMarkdown = changes.descriptionMarkdown;
 	if (changes.labelIds !== undefined) update.labelIds = changes.labelIds;
 	if (changes.dates !== undefined) update.dates = changes.dates;
+	if (changes.checklists !== undefined) update.checklists = changes.checklists;
 	if (changes.customFields !== undefined) update.customFields = changes.customFields;
 	if (changes.customFieldOrder !== undefined) update.customFieldOrder = changes.customFieldOrder;
 
@@ -806,7 +815,13 @@ function isTemplateStructureUpdate(
 	changes: Partial<
 		Pick<
 			CardTemplateRecord,
-			'name' | 'descriptionMarkdown' | 'labelIds' | 'dates' | 'customFields' | 'customFieldOrder'
+			| 'name'
+			| 'descriptionMarkdown'
+			| 'labelIds'
+			| 'dates'
+			| 'checklists'
+			| 'customFields'
+			| 'customFieldOrder'
 		>
 	>
 ) {
@@ -814,6 +829,7 @@ function isTemplateStructureUpdate(
 		changes.descriptionMarkdown !== undefined ||
 		changes.labelIds !== undefined ||
 		changes.dates !== undefined ||
+		changes.checklists !== undefined ||
 		changes.customFields !== undefined ||
 		changes.customFieldOrder !== undefined
 	);

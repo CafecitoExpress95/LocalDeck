@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { dndzone } from 'svelte-dnd-action';
 	import {
 		ArrowLeft,
@@ -11,6 +11,7 @@
 		Download,
 		FileArchive,
 		LayoutDashboard,
+		ListChecks,
 		MessageSquare,
 		Minus,
 		PanelTop,
@@ -31,8 +32,14 @@
 		PreparedBoardArchiveImport
 	} from '$lib/localdeck/board-file/boardArchiveTypes';
 	import {
+		checklistDisplayItems,
+		checklistProgress,
+		copyChecklists,
+		createChecklist,
+		createChecklistItem,
 		customFieldInputValue,
 		emptyCustomFieldValue,
+		normalizeChecklists,
 		normalizeCustomFieldValue,
 		normalizeExplicitCustomFields,
 		parseOptionsDraft
@@ -75,6 +82,8 @@
 	} from '$lib/localdeck/repository';
 	import type {
 		BoardRecord,
+		CardChecklist,
+		CardChecklistItem,
 		CardComment,
 		CardDateEntry,
 		CardRecord,
@@ -107,6 +116,7 @@
 
 	const appVersion = packageJson.version;
 	const availableLabelColors = labelColors();
+	const now = () => new Date().toISOString();
 	const fieldTypes: { value: CustomFieldType; label: string }[] = [
 		{ value: 'text', label: 'Text' },
 		{ value: 'multiline', label: 'Multi-line Text' },
@@ -151,6 +161,7 @@
 	let cardTemplateStateDraft: CardTemplateState = 'custom';
 	let cardLabelIdsDraft: string[] = [];
 	let cardDatesDraft: CardDateEntry[] = [];
+	let cardChecklistsDraft: CardChecklist[] = [];
 	let cardCustomFieldsDraft: Record<string, CustomFieldValue> = {};
 	let cardCustomFieldOrderDraft: string[] = [];
 	let editingDescription = false;
@@ -170,6 +181,7 @@
 	let templateDescriptionDraft = '';
 	let templateLabelIdsDraft: string[] = [];
 	let templateDatesDraft: CardDateEntry[] = [];
+	let templateChecklistsDraft: CardChecklist[] = [];
 	let templateCustomFieldsDraft: Record<string, CustomFieldValue> = {};
 	let templateCustomFieldOrderDraft: string[] = [];
 	let newTemplateDateType: CardDateEntry['type'] = 'due';
@@ -596,6 +608,7 @@
 		cardTemplateStateDraft = card.templateState;
 		cardLabelIdsDraft = [...card.labelIds];
 		cardDatesDraft = card.dates.map((date) => ({ ...date }));
+		cardChecklistsDraft = copyChecklists(card.checklists);
 		cardCustomFieldsDraft = { ...card.customFields };
 		cardCustomFieldOrderDraft = [...card.customFieldOrder];
 		editingDescription = false;
@@ -609,9 +622,18 @@
 		saveTemplateNameDraft = `${card.name} template`;
 	}
 
-	function closeCard() {
+	function closeCardDialog() {
 		selectedCardId = null;
 		editingDescription = false;
+	}
+
+	async function handleCloseCard() {
+		if (!selectedCard) {
+			closeCardDialog();
+			return;
+		}
+
+		await handleSaveCard({ closeAfterSave: true });
 	}
 
 	async function handleSaveCard(options: { closeAfterSave?: boolean } = {}) {
@@ -627,6 +649,7 @@
 					templateState: nextCardTemplateState(),
 					labelIds: cardLabelIdsDraft,
 					dates: cardDatesDraft,
+					checklists: checklistsForSave(cardChecklistsDraft),
 					customFields: normalizeExplicitCustomFields(customFields, cardCustomFieldsDraft),
 					customFieldOrder: orderedExistingFieldIds(
 						cardCustomFieldsDraft,
@@ -637,7 +660,7 @@
 				await reloadCurrentBoard(options.closeAfterSave ? null : cardId);
 				editingDescription = false;
 
-				if (options.closeAfterSave) closeCard();
+				if (options.closeAfterSave) closeCardDialog();
 			},
 			'Card save failed.',
 			cardId
@@ -657,7 +680,7 @@
 		if (!template) return;
 
 		const confirmed = confirm(
-			`Apply "${template.name}" to this card? The card name and comments will be preserved, but labels, dates, description, and custom fields will be replaced.`
+			`Apply "${template.name}" to this card? The card name and comments will be preserved, but labels, dates, checklists, description, and custom fields will be replaced.`
 		);
 		if (!confirmed) {
 			cardTemplateDraft = selectedCard.templateId;
@@ -688,6 +711,7 @@
 					templateState: 'custom',
 					labelIds: cardLabelIdsDraft,
 					dates: cardDatesDraft,
+					checklists: checklistsForSave(cardChecklistsDraft),
 					customFields: normalizeExplicitCustomFields(customFields, cardCustomFieldsDraft),
 					customFieldOrder: orderedExistingFieldIds(
 						cardCustomFieldsDraft,
@@ -712,7 +736,7 @@
 			async () => {
 				await deleteCard(cardId);
 				await reloadCurrentBoard(null);
-				closeCard();
+				closeCardDialog();
 			},
 			'Card deletion failed.',
 			cardId
@@ -786,6 +810,7 @@
 				descriptionMarkdown: templateDescriptionDraft,
 				labelIds: templateLabelIdsDraft,
 				dates: templateDatesDraft,
+				checklists: checklistsForSave(templateChecklistsDraft),
 				customFields: normalizeExplicitCustomFields(customFields, templateCustomFieldsDraft),
 				customFieldOrder: orderedExistingFieldIds(
 					templateCustomFieldsDraft,
@@ -827,6 +852,7 @@
 		templateDescriptionDraft = template.descriptionMarkdown;
 		templateLabelIdsDraft = [...template.labelIds];
 		templateDatesDraft = template.dates.map((date) => ({ ...date }));
+		templateChecklistsDraft = copyChecklists(template.checklists);
 		templateCustomFieldsDraft = { ...template.customFields };
 		templateCustomFieldOrderDraft = [...template.customFieldOrder];
 		newTemplateDateType = 'due';
@@ -1021,6 +1047,514 @@
 		);
 	}
 
+	function addCardChecklist() {
+		const { checklists, itemId } = addChecklistDraft(cardChecklistsDraft);
+		cardChecklistsDraft = checklists;
+		markCardStructureCustom();
+		void focusChecklistItem(itemId);
+	}
+
+	function addTemplateChecklist() {
+		const { checklists, itemId } = addChecklistDraft(templateChecklistsDraft);
+		templateChecklistsDraft = checklists;
+		void focusChecklistItem(itemId);
+	}
+
+	function addChecklistItemToCard(checklistId: string, parentId: string | null = null) {
+		const { checklists, itemId } = addChecklistItemDraft(
+			cardChecklistsDraft,
+			checklistId,
+			parentId
+		);
+		cardChecklistsDraft = checklists;
+		markCardStructureCustom();
+		void focusChecklistItem(itemId);
+	}
+
+	function addChecklistItemToTemplate(checklistId: string, parentId: string | null = null) {
+		const { checklists, itemId } = addChecklistItemDraft(
+			templateChecklistsDraft,
+			checklistId,
+			parentId
+		);
+		templateChecklistsDraft = checklists;
+		void focusChecklistItem(itemId);
+	}
+
+	function updateCardChecklistName(checklistId: string, name: string) {
+		cardChecklistsDraft = updateChecklistDraft(cardChecklistsDraft, checklistId, { name });
+		markCardStructureCustom();
+	}
+
+	function updateTemplateChecklistName(checklistId: string, name: string) {
+		templateChecklistsDraft = updateChecklistDraft(templateChecklistsDraft, checklistId, { name });
+	}
+
+	function removeCardChecklist(checklistId: string) {
+		cardChecklistsDraft = cardChecklistsDraft.filter((checklist) => checklist.id !== checklistId);
+		markCardStructureCustom();
+	}
+
+	function removeTemplateChecklist(checklistId: string) {
+		templateChecklistsDraft = templateChecklistsDraft.filter(
+			(checklist) => checklist.id !== checklistId
+		);
+	}
+
+	function moveCardChecklist(checklistId: string, direction: -1 | 1) {
+		cardChecklistsDraft = moveChecklistDraft(cardChecklistsDraft, checklistId, direction);
+		markCardStructureCustom();
+	}
+
+	function moveTemplateChecklist(checklistId: string, direction: -1 | 1) {
+		templateChecklistsDraft = moveChecklistDraft(templateChecklistsDraft, checklistId, direction);
+	}
+
+	function moveCardChecklistItem(checklistId: string, itemId: string, direction: -1 | 1) {
+		cardChecklistsDraft = moveChecklistItemDraft(
+			cardChecklistsDraft,
+			checklistId,
+			itemId,
+			direction
+		);
+		markCardStructureCustom();
+		void focusChecklistItem(itemId);
+	}
+
+	function moveTemplateChecklistItem(checklistId: string, itemId: string, direction: -1 | 1) {
+		templateChecklistsDraft = moveChecklistItemDraft(
+			templateChecklistsDraft,
+			checklistId,
+			itemId,
+			direction
+		);
+		void focusChecklistItem(itemId);
+	}
+
+	function updateCardChecklistItem(
+		checklistId: string,
+		itemId: string,
+		changes: Partial<Pick<CardChecklistItem, 'label' | 'checked' | 'parentId'>>
+	) {
+		cardChecklistsDraft = updateChecklistItemDraft(
+			cardChecklistsDraft,
+			checklistId,
+			itemId,
+			changes
+		);
+		markCardStructureCustom();
+	}
+
+	function updateTemplateChecklistItem(
+		checklistId: string,
+		itemId: string,
+		changes: Partial<Pick<CardChecklistItem, 'label' | 'checked' | 'parentId'>>
+	) {
+		templateChecklistsDraft = updateChecklistItemDraft(
+			templateChecklistsDraft,
+			checklistId,
+			itemId,
+			changes
+		);
+	}
+
+	function removeCardChecklistItem(checklistId: string, itemId: string) {
+		const checklist = cardChecklistsDraft.find((item) => item.id === checklistId);
+		if (!checklist) return;
+		if (
+			checklistHasChildren(checklist, itemId) &&
+			!confirm(
+				'Deleting this item will also delete its child items. Are you sure you want to delete it?'
+			)
+		) {
+			return;
+		}
+		cardChecklistsDraft = removeChecklistItemDraft(cardChecklistsDraft, checklistId, itemId);
+		markCardStructureCustom();
+	}
+
+	function removeTemplateChecklistItem(checklistId: string, itemId: string) {
+		const checklist = templateChecklistsDraft.find((item) => item.id === checklistId);
+		if (!checklist) return;
+		if (
+			checklistHasChildren(checklist, itemId) &&
+			!confirm(
+				'Deleting this item will also delete its child items. Are you sure you want to delete it?'
+			)
+		) {
+			return;
+		}
+		templateChecklistsDraft = removeChecklistItemDraft(
+			templateChecklistsDraft,
+			checklistId,
+			itemId
+		);
+	}
+
+	function handleCardChecklistItemKeydown(
+		checklistId: string,
+		itemId: string,
+		event: KeyboardEvent
+	) {
+		const result = handleChecklistItemKeydown(cardChecklistsDraft, checklistId, itemId, event);
+		if (!result) return;
+		cardChecklistsDraft = result.checklists;
+		markCardStructureCustom();
+		if (result.focusItemId) void focusChecklistItem(result.focusItemId);
+	}
+
+	function handleTemplateChecklistItemKeydown(
+		checklistId: string,
+		itemId: string,
+		event: KeyboardEvent
+	) {
+		const result = handleChecklistItemKeydown(templateChecklistsDraft, checklistId, itemId, event);
+		if (!result) return;
+		templateChecklistsDraft = result.checklists;
+		if (result.focusItemId) void focusChecklistItem(result.focusItemId);
+	}
+
+	function addChecklistDraft(checklists: CardChecklist[]) {
+		const timestamp = now();
+		const checklist = createChecklist('Checklist', (checklists.length + 1) * 1000, timestamp);
+		const item = createChecklistItem('', null, 1000, timestamp);
+		return {
+			checklists: [...checklists, { ...checklist, items: [item] }],
+			itemId: item.id
+		};
+	}
+
+	function addChecklistItemDraft(
+		checklists: CardChecklist[],
+		checklistId: string,
+		parentId: string | null
+	) {
+		const timestamp = now();
+		const item = createChecklistItem('', parentId, 1000, timestamp);
+		return {
+			checklists: checklists.map((checklist) =>
+				checklist.id === checklistId
+					? { ...checklist, items: reorderChecklistItems([...checklist.items, item]) }
+					: checklist
+			),
+			itemId: item.id
+		};
+	}
+
+	function updateChecklistDraft(
+		checklists: CardChecklist[],
+		checklistId: string,
+		changes: Partial<Pick<CardChecklist, 'name'>>
+	) {
+		const timestamp = now();
+		return checklists.map((checklist) =>
+			checklist.id === checklistId ? { ...checklist, ...changes, updatedAt: timestamp } : checklist
+		);
+	}
+
+	function moveChecklistDraft(checklists: CardChecklist[], checklistId: string, direction: -1 | 1) {
+		const index = checklists.findIndex((checklist) => checklist.id === checklistId);
+		const nextIndex = index + direction;
+		if (index < 0 || nextIndex < 0 || nextIndex >= checklists.length) return checklists;
+
+		const next = [...checklists];
+		[next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+		return next.map((checklist, itemIndex) => ({ ...checklist, position: (itemIndex + 1) * 1000 }));
+	}
+
+	function moveChecklistItemDraft(
+		checklists: CardChecklist[],
+		checklistId: string,
+		itemId: string,
+		direction: -1 | 1
+	) {
+		const timestamp = now();
+		return checklists.map((checklist) => {
+			if (checklist.id !== checklistId || !canMoveChecklistItem(checklist, itemId, direction)) {
+				return checklist;
+			}
+			return {
+				...checklist,
+				updatedAt: timestamp,
+				items: moveChecklistItem(checklist, itemId, direction)
+			};
+		});
+	}
+
+	function moveChecklistItem(checklist: CardChecklist, itemId: string, direction: -1 | 1) {
+		const displayItems = checklistDisplayItems(checklist).map((entry) => entry.item);
+		const item = displayItems.find((entry) => entry.id === itemId);
+		if (!item) return checklist.items;
+
+		const siblingIds = displayItems
+			.filter((entry) => entry.parentId === item.parentId)
+			.map((entry) => entry.id);
+		const siblingIndex = siblingIds.indexOf(itemId);
+		const targetSiblingId = siblingIds[siblingIndex + direction];
+		if (!targetSiblingId) return checklist.items;
+
+		const movingIds = checklistSubtreeIds(checklist, itemId);
+		const targetIds = checklistSubtreeIds(checklist, targetSiblingId);
+		const movingBlock = displayItems.filter((entry) => movingIds.has(entry.id));
+		const withoutMoving = displayItems.filter((entry) => !movingIds.has(entry.id));
+		const targetIndex = withoutMoving.findIndex((entry) => entry.id === targetSiblingId);
+		const insertIndex = direction < 0 ? targetIndex : targetIndex + targetIds.size;
+		const next = [...withoutMoving];
+		next.splice(insertIndex, 0, ...movingBlock);
+
+		return reorderChecklistItems(next);
+	}
+
+	function canMoveChecklistItem(checklist: CardChecklist, itemId: string, direction: -1 | 1) {
+		const displayItems = checklistDisplayItems(checklist).map((entry) => entry.item);
+		const item = displayItems.find((entry) => entry.id === itemId);
+		if (!item) return false;
+
+		const siblingIds = displayItems
+			.filter((entry) => entry.parentId === item.parentId)
+			.map((entry) => entry.id);
+		const siblingIndex = siblingIds.indexOf(itemId);
+		const nextIndex = siblingIndex + direction;
+		return siblingIndex >= 0 && nextIndex >= 0 && nextIndex < siblingIds.length;
+	}
+
+	function updateChecklistItemDraft(
+		checklists: CardChecklist[],
+		checklistId: string,
+		itemId: string,
+		changes: Partial<Pick<CardChecklistItem, 'label' | 'checked' | 'parentId'>>
+	) {
+		const timestamp = now();
+		return checklists.map((checklist) =>
+			checklist.id === checklistId
+				? {
+						...checklist,
+						updatedAt: timestamp,
+						items: checklist.items.map((item) =>
+							item.id === itemId ? { ...item, ...changes, updatedAt: timestamp } : item
+						)
+					}
+				: checklist
+		);
+	}
+
+	function removeChecklistItemDraft(
+		checklists: CardChecklist[],
+		checklistId: string,
+		itemId: string
+	) {
+		return checklists.map((checklist) => {
+			if (checklist.id !== checklistId) return checklist;
+
+			const removeIds = checklistDescendantIds(checklist, itemId);
+			removeIds.add(itemId);
+			return {
+				...checklist,
+				updatedAt: now(),
+				items: reorderChecklistItems(checklist.items.filter((item) => !removeIds.has(item.id)))
+			};
+		});
+	}
+
+	function handleChecklistItemKeydown(
+		checklists: CardChecklist[],
+		checklistId: string,
+		itemId: string,
+		event: KeyboardEvent
+	): { checklists: CardChecklist[]; focusItemId?: string } | null {
+		const checklist = checklists.find((item) => item.id === checklistId);
+		if (!checklist) return null;
+
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			return insertChecklistItemAfter(checklists, checklist, itemId);
+		}
+
+		if (event.key === 'Tab') {
+			event.preventDefault();
+			return event.shiftKey
+				? outdentChecklistItem(checklists, checklist, itemId)
+				: indentChecklistItem(checklists, checklist, itemId);
+		}
+
+		if (event.key === 'Backspace' && isAtInputStart(event)) {
+			const item = checklist.items.find((entry) => entry.id === itemId);
+			if (!item) return null;
+			if (item.parentId) {
+				event.preventDefault();
+				return outdentChecklistItem(checklists, checklist, itemId);
+			}
+			if (!item.label && !checklistHasChildren(checklist, itemId)) {
+				event.preventDefault();
+				const display = checklistDisplayItems(checklist);
+				const index = display.findIndex((entry) => entry.item.id === itemId);
+				const previousId = display[index - 1]?.item.id;
+				return {
+					checklists: removeChecklistItemDraft(checklists, checklistId, itemId),
+					focusItemId: previousId
+				};
+			}
+		}
+
+		return null;
+	}
+
+	function insertChecklistItemAfter(
+		checklists: CardChecklist[],
+		checklist: CardChecklist,
+		itemId: string
+	) {
+		const display = checklistDisplayItems(checklist);
+		const index = display.findIndex((entry) => entry.item.id === itemId);
+		if (index < 0) return null;
+
+		const current = display[index];
+		if (!current.item.label.trim()) return { checklists, focusItemId: current.item.id };
+
+		let insertIndex = index + 1;
+		while (display[insertIndex] && display[insertIndex].depth > current.depth) insertIndex += 1;
+
+		const timestamp = now();
+		const nextItem = createChecklistItem('', current.item.parentId, 1000, timestamp);
+		const orderedItems = display.map((entry) => entry.item);
+		orderedItems.splice(insertIndex, 0, nextItem);
+
+		return {
+			checklists: checklists.map((entry) =>
+				entry.id === checklist.id
+					? { ...entry, updatedAt: timestamp, items: reorderChecklistItems(orderedItems) }
+					: entry
+			),
+			focusItemId: nextItem.id
+		};
+	}
+
+	function indentChecklistItem(
+		checklists: CardChecklist[],
+		checklist: CardChecklist,
+		itemId: string
+	) {
+		const display = checklistDisplayItems(checklist);
+		const index = display.findIndex((entry) => entry.item.id === itemId);
+		const previous = display[index - 1]?.item;
+		if (!previous) return null;
+		return {
+			checklists: updateChecklistItemDraft(checklists, checklist.id, itemId, {
+				parentId: previous.id
+			}),
+			focusItemId: itemId
+		};
+	}
+
+	function outdentChecklistItem(
+		checklists: CardChecklist[],
+		checklist: CardChecklist,
+		itemId: string
+	) {
+		const item = checklist.items.find((entry) => entry.id === itemId);
+		if (!item?.parentId) return null;
+		const parent = checklist.items.find((entry) => entry.id === item.parentId);
+		return {
+			checklists: updateChecklistItemDraft(checklists, checklist.id, itemId, {
+				parentId: parent?.parentId ?? null
+			}),
+			focusItemId: itemId
+		};
+	}
+
+	function reorderChecklistItems(items: CardChecklistItem[]) {
+		return items.map((item, index) => ({
+			...item,
+			position: (index + 1) * 1000
+		}));
+	}
+
+	function checklistsForSave(checklists: CardChecklist[]) {
+		return normalizeChecklists(checklists).map((checklist, checklistIndex) => ({
+			...checklist,
+			name: checklist.name.trim() || 'Checklist',
+			position: (checklistIndex + 1) * 1000,
+			items: trimBlankChecklistItems(checklist.items)
+		}));
+	}
+
+	function trimBlankChecklistItems(items: CardChecklistItem[]) {
+		const normalized = checklistDisplayItems({ items }).map((entry) => entry.item);
+		const itemMap = new Map(normalized.map((item) => [item.id, item]));
+		const blankIds = new Set(
+			normalized.filter((item) => !item.label.trim()).map((item) => item.id)
+		);
+		const keptIds = new Set(normalized.filter((item) => item.label.trim()).map((item) => item.id));
+
+		return normalized
+			.filter((item) => item.label.trim())
+			.map((item, index) => ({
+				...item,
+				label: item.label.trim(),
+				parentId: nearestKeptParent(item.parentId, itemMap, blankIds, keptIds),
+				position: (index + 1) * 1000
+			}));
+	}
+
+	function nearestKeptParent(
+		parentId: string | null,
+		items: Map<string, CardChecklistItem>,
+		blankIds: Set<string>,
+		keptIds: Set<string>
+	) {
+		let currentParentId = parentId;
+		while (currentParentId && blankIds.has(currentParentId)) {
+			currentParentId = items.get(currentParentId)?.parentId ?? null;
+		}
+		return currentParentId && keptIds.has(currentParentId) ? currentParentId : null;
+	}
+
+	function checklistHasChildren(checklist: CardChecklist, itemId: string) {
+		return checklist.items.some((item) => item.parentId === itemId);
+	}
+
+	function checklistDescendantIds(checklist: CardChecklist, itemId: string) {
+		const children = new Map<string, string[]>();
+		for (const item of checklist.items) {
+			if (!item.parentId) continue;
+			children.set(item.parentId, [...(children.get(item.parentId) ?? []), item.id]);
+		}
+
+		const descendants = new Set<string>();
+		const visit = (parentId: string) => {
+			for (const childId of children.get(parentId) ?? []) {
+				descendants.add(childId);
+				visit(childId);
+			}
+		};
+		visit(itemId);
+		return descendants;
+	}
+
+	function checklistSubtreeIds(checklist: CardChecklist, itemId: string) {
+		const ids = checklistDescendantIds(checklist, itemId);
+		ids.add(itemId);
+		return ids;
+	}
+
+	function cardChecklistProgress(card: CardRecord) {
+		return checklistProgress(card.checklists);
+	}
+
+	async function focusChecklistItem(itemId?: string) {
+		if (!itemId) return;
+		await tick();
+		const input = document.querySelector<HTMLInputElement>(
+			`input[data-checklist-item-id="${itemId}"]`
+		);
+		input?.focus();
+	}
+
+	function isAtInputStart(event: KeyboardEvent) {
+		const input = event.currentTarget as HTMLInputElement;
+		return input.selectionStart === 0 && input.selectionEnd === 0;
+	}
+
 	function removeDraftCustomField(values: Record<string, CustomFieldValue>, fieldId: string) {
 		const next = { ...values };
 		delete next[fieldId];
@@ -1047,6 +1581,8 @@
 			card.descriptionMarkdown !== cardDescriptionDraft ||
 			JSON.stringify(card.labelIds) !== JSON.stringify(cardLabelIdsDraft) ||
 			JSON.stringify(card.dates) !== JSON.stringify(cardDatesDraft) ||
+			JSON.stringify(normalizeChecklists(card.checklists)) !==
+				JSON.stringify(checklistsForSave(cardChecklistsDraft)) ||
 			JSON.stringify(card.customFieldOrder) !==
 				JSON.stringify(orderedExistingFieldIds(cardCustomFieldsDraft, cardCustomFieldOrderDraft)) ||
 			JSON.stringify(Object.keys(card.customFields).sort()) !==
@@ -1498,6 +2034,13 @@
 											{/each}
 										</span>
 									{/if}
+									{#if cardChecklistProgress(card).total > 0}
+										<span class="comment-pill"
+											><ListChecks size={13} />
+											{cardChecklistProgress(card).checked}/{cardChecklistProgress(card)
+												.total}</span
+										>
+									{/if}
 									{#if card.comments.length > 0}
 										<span class="comment-pill"
 											><MessageSquare size={13} /> {card.comments.length}</span
@@ -1684,6 +2227,145 @@
 										<button class="icon-button filled" type="button" onclick={addTemplateDate}>
 											<Plus size={16} />
 										</button>
+									</div>
+								</div>
+								<div class="mini-section">
+									<div class="section-heading tight">
+										<h3>Checklists</h3>
+										<button
+											class="icon-button filled"
+											type="button"
+											aria-label="Add checklist to template"
+											title="Add checklist"
+											onclick={addTemplateChecklist}
+										>
+											<Plus size={16} />
+										</button>
+									</div>
+									<div class="checklist-list compact">
+										{#each templateChecklistsDraft as checklist, checklistIndex (checklist.id)}
+											<article class="checklist-editor">
+												<div class="checklist-heading">
+													<input
+														value={checklist.name}
+														aria-label="Checklist name"
+														oninput={(event) =>
+															updateTemplateChecklistName(
+																checklist.id,
+																(event.currentTarget as HTMLInputElement).value
+															)}
+													/>
+													<div class="field-order-actions">
+														<button
+															class="icon-button"
+															type="button"
+															aria-label={`Move ${checklist.name || 'checklist'} up`}
+															title="Move up"
+															disabled={checklistIndex === 0}
+															onclick={() => moveTemplateChecklist(checklist.id, -1)}
+														>
+															<ArrowUp size={15} />
+														</button>
+														<button
+															class="icon-button"
+															type="button"
+															aria-label={`Move ${checklist.name || 'checklist'} down`}
+															title="Move down"
+															disabled={checklistIndex === templateChecklistsDraft.length - 1}
+															onclick={() => moveTemplateChecklist(checklist.id, 1)}
+														>
+															<ArrowDown size={15} />
+														</button>
+														<button
+															class="icon-button danger"
+															type="button"
+															aria-label={`Delete ${checklist.name || 'checklist'}`}
+															title="Delete checklist"
+															onclick={() => removeTemplateChecklist(checklist.id)}
+														>
+															<Trash2 size={15} />
+														</button>
+													</div>
+												</div>
+												<div class="checklist-items">
+													{#each checklistDisplayItems(checklist) as display (display.item.id)}
+														<div
+															class="checklist-item-row"
+															style={`--item-depth: ${Math.min(display.depth, 8)}`}
+														>
+															<input
+																type="checkbox"
+																checked={display.item.checked}
+																aria-label={`Complete ${display.item.label || 'checklist item'}`}
+																onchange={(event) =>
+																	updateTemplateChecklistItem(checklist.id, display.item.id, {
+																		checked: (event.currentTarget as HTMLInputElement).checked
+																	})}
+															/>
+															<input
+																data-checklist-item-id={display.item.id}
+																class:checked-item={display.item.checked}
+																value={display.item.label}
+																placeholder="Checklist item"
+																aria-label="Checklist item label"
+																oninput={(event) =>
+																	updateTemplateChecklistItem(checklist.id, display.item.id, {
+																		label: (event.currentTarget as HTMLInputElement).value
+																	})}
+																onkeydown={(event) =>
+																	handleTemplateChecklistItemKeydown(
+																		checklist.id,
+																		display.item.id,
+																		event
+																	)}
+															/>
+															<div class="checklist-item-actions">
+																<button
+																	class="icon-button"
+																	type="button"
+																	aria-label={`Move ${display.item.label || 'checklist item'} up`}
+																	title="Move up"
+																	disabled={!canMoveChecklistItem(checklist, display.item.id, -1)}
+																	onclick={() =>
+																		moveTemplateChecklistItem(checklist.id, display.item.id, -1)}
+																>
+																	<ArrowUp size={15} />
+																</button>
+																<button
+																	class="icon-button"
+																	type="button"
+																	aria-label={`Move ${display.item.label || 'checklist item'} down`}
+																	title="Move down"
+																	disabled={!canMoveChecklistItem(checklist, display.item.id, 1)}
+																	onclick={() =>
+																		moveTemplateChecklistItem(checklist.id, display.item.id, 1)}
+																>
+																	<ArrowDown size={15} />
+																</button>
+																<button
+																	class="icon-button danger"
+																	type="button"
+																	aria-label={`Delete ${display.item.label || 'checklist item'}`}
+																	title="Delete item"
+																	onclick={() =>
+																		removeTemplateChecklistItem(checklist.id, display.item.id)}
+																>
+																	<X size={15} />
+																</button>
+															</div>
+														</div>
+													{/each}
+												</div>
+												<button
+													class="secondary-button compact"
+													type="button"
+													onclick={() => addChecklistItemToTemplate(checklist.id)}
+												>
+													<Plus size={16} />
+													Item
+												</button>
+											</article>
+										{/each}
 									</div>
 								</div>
 								<div class="mini-section">
@@ -2051,7 +2733,11 @@
 {/if}
 
 {#if selectedCard}
-	<button class="modal-backdrop" type="button" aria-label="Close card dialog" onclick={closeCard}
+	<button
+		class="modal-backdrop"
+		type="button"
+		aria-label="Close card dialog"
+		onclick={handleCloseCard}
 	></button>
 	<aside class="card-dialog" aria-label="Card dialog">
 		<header class="dialog-header">
@@ -2064,52 +2750,13 @@
 				type="button"
 				aria-label="Close card"
 				title="Close"
-				onclick={closeCard}
+				onclick={handleCloseCard}
 			>
 				<X size={19} />
 			</button>
 		</header>
 
 		<div class="dialog-scroll">
-			<section class="dialog-section">
-				<div class="section-heading tight">
-					<h2>Template</h2>
-				</div>
-				<select
-					bind:value={cardTemplateDraft}
-					aria-label="Card template"
-					onchange={(event) =>
-						handleApplyTemplateToCard((event.currentTarget as HTMLSelectElement).value)}
-				>
-					<option value="">No template</option>
-					{#each templates as template (template.id)}
-						<option value={template.id}>{template.name}</option>
-					{/each}
-				</select>
-				<div class="template-status-row">
-					<span class:custom-state={cardTemplateStateDraft === 'custom'}
-						>{cardTemplateStatusLabel}</span
-					>
-					{#if cardTemplateStateDraft === 'custom'}
-						<div class="save-template-row">
-							<input
-								bind:value={saveTemplateNameDraft}
-								aria-label="New template name"
-								placeholder="New template name"
-							/>
-							<button
-								class="secondary-button compact"
-								type="button"
-								onclick={handleSaveCardAsTemplate}
-							>
-								<Check size={16} />
-								Save as template
-							</button>
-						</div>
-					{/if}
-				</div>
-			</section>
-
 			<section class="dialog-section">
 				<div class="section-heading tight">
 					<h2>Labels</h2>
@@ -2131,6 +2778,43 @@
 						</button>
 					{/each}
 				</div>
+			</section>
+
+			<section class="dialog-section">
+				<div class="section-heading tight">
+					<h2>Description</h2>
+					{#if editingDescription}
+						<button class="primary-button compact" type="button" onclick={() => handleSaveCard()}>
+							<Check size={17} />
+							Save
+						</button>
+					{:else}
+						<button
+							class="secondary-button compact"
+							type="button"
+							onclick={() => (editingDescription = true)}
+						>
+							Edit
+						</button>
+					{/if}
+				</div>
+				{#if editingDescription}
+					<textarea
+						class="markdown-editor"
+						bind:value={cardDescriptionDraft}
+						placeholder="Write Markdown notes for this card."
+						oninput={markCardStructureCustom}
+					></textarea>
+					<div class="markdown-preview">
+						<!-- svelte-ignore svelte/no-at-html-tags (renderMarkdown sanitizes rendered Markdown) -->
+						{@html renderMarkdown(cardDescriptionDraft)}
+					</div>
+				{:else}
+					<div class="markdown-preview">
+						<!-- svelte-ignore svelte/no-at-html-tags (renderMarkdown sanitizes rendered Markdown) -->
+						{@html renderMarkdown(selectedCard.descriptionMarkdown)}
+					</div>
+				{/if}
 			</section>
 
 			<section class="dialog-section">
@@ -2328,39 +3012,138 @@
 
 			<section class="dialog-section">
 				<div class="section-heading tight">
-					<h2>Description</h2>
-					{#if editingDescription}
-						<button class="primary-button compact" type="button" onclick={() => handleSaveCard()}>
-							<Check size={17} />
-							Save
-						</button>
-					{:else}
+					<h2>Checklists</h2>
+					<div class="inline-actions">
+						<span class="subtle-count">{cardChecklistsDraft.length}</span>
 						<button
-							class="secondary-button compact"
+							class="icon-button filled"
 							type="button"
-							onclick={() => (editingDescription = true)}
+							aria-label="Add checklist"
+							title="Add checklist"
+							onclick={addCardChecklist}
 						>
-							Edit
+							<Plus size={16} />
 						</button>
-					{/if}
+					</div>
 				</div>
-				{#if editingDescription}
-					<textarea
-						class="markdown-editor"
-						bind:value={cardDescriptionDraft}
-						placeholder="Write Markdown notes for this card."
-						oninput={markCardStructureCustom}
-					></textarea>
-					<div class="markdown-preview">
-						<!-- svelte-ignore svelte/no-at-html-tags (renderMarkdown sanitizes rendered Markdown) -->
-						{@html renderMarkdown(cardDescriptionDraft)}
-					</div>
-				{:else}
-					<div class="markdown-preview">
-						<!-- svelte-ignore svelte/no-at-html-tags (renderMarkdown sanitizes rendered Markdown) -->
-						{@html renderMarkdown(selectedCard.descriptionMarkdown)}
-					</div>
-				{/if}
+				<div class="checklist-list">
+					{#each cardChecklistsDraft as checklist, checklistIndex (checklist.id)}
+						<article class="checklist-editor">
+							<div class="checklist-heading">
+								<input
+									value={checklist.name}
+									aria-label="Checklist name"
+									oninput={(event) =>
+										updateCardChecklistName(
+											checklist.id,
+											(event.currentTarget as HTMLInputElement).value
+										)}
+								/>
+								<div class="field-order-actions">
+									<button
+										class="icon-button"
+										type="button"
+										aria-label={`Move ${checklist.name || 'checklist'} up`}
+										title="Move up"
+										disabled={checklistIndex === 0}
+										onclick={() => moveCardChecklist(checklist.id, -1)}
+									>
+										<ArrowUp size={15} />
+									</button>
+									<button
+										class="icon-button"
+										type="button"
+										aria-label={`Move ${checklist.name || 'checklist'} down`}
+										title="Move down"
+										disabled={checklistIndex === cardChecklistsDraft.length - 1}
+										onclick={() => moveCardChecklist(checklist.id, 1)}
+									>
+										<ArrowDown size={15} />
+									</button>
+									<button
+										class="icon-button danger"
+										type="button"
+										aria-label={`Delete ${checklist.name || 'checklist'}`}
+										title="Delete checklist"
+										onclick={() => removeCardChecklist(checklist.id)}
+									>
+										<Trash2 size={15} />
+									</button>
+								</div>
+							</div>
+							<div class="checklist-items">
+								{#each checklistDisplayItems(checklist) as display (display.item.id)}
+									<div
+										class="checklist-item-row"
+										style={`--item-depth: ${Math.min(display.depth, 8)}`}
+									>
+										<input
+											type="checkbox"
+											checked={display.item.checked}
+											aria-label={`Complete ${display.item.label || 'checklist item'}`}
+											onchange={(event) =>
+												updateCardChecklistItem(checklist.id, display.item.id, {
+													checked: (event.currentTarget as HTMLInputElement).checked
+												})}
+										/>
+										<input
+											data-checklist-item-id={display.item.id}
+											class:checked-item={display.item.checked}
+											value={display.item.label}
+											placeholder="Checklist item"
+											aria-label="Checklist item label"
+											oninput={(event) =>
+												updateCardChecklistItem(checklist.id, display.item.id, {
+													label: (event.currentTarget as HTMLInputElement).value
+												})}
+											onkeydown={(event) =>
+												handleCardChecklistItemKeydown(checklist.id, display.item.id, event)}
+										/>
+										<div class="checklist-item-actions">
+											<button
+												class="icon-button"
+												type="button"
+												aria-label={`Move ${display.item.label || 'checklist item'} up`}
+												title="Move up"
+												disabled={!canMoveChecklistItem(checklist, display.item.id, -1)}
+												onclick={() => moveCardChecklistItem(checklist.id, display.item.id, -1)}
+											>
+												<ArrowUp size={15} />
+											</button>
+											<button
+												class="icon-button"
+												type="button"
+												aria-label={`Move ${display.item.label || 'checklist item'} down`}
+												title="Move down"
+												disabled={!canMoveChecklistItem(checklist, display.item.id, 1)}
+												onclick={() => moveCardChecklistItem(checklist.id, display.item.id, 1)}
+											>
+												<ArrowDown size={15} />
+											</button>
+											<button
+												class="icon-button danger"
+												type="button"
+												aria-label={`Delete ${display.item.label || 'checklist item'}`}
+												title="Delete item"
+												onclick={() => removeCardChecklistItem(checklist.id, display.item.id)}
+											>
+												<X size={15} />
+											</button>
+										</div>
+									</div>
+								{/each}
+							</div>
+							<button
+								class="secondary-button compact"
+								type="button"
+								onclick={() => addChecklistItemToCard(checklist.id)}
+							>
+								<Plus size={16} />
+								Item
+							</button>
+						</article>
+					{/each}
+				</div>
 			</section>
 
 			<section class="dialog-section">
@@ -2438,6 +3221,45 @@
 					{/each}
 				</div>
 			</section>
+
+			<section class="dialog-section">
+				<div class="section-heading tight">
+					<h2>Template</h2>
+				</div>
+				<select
+					bind:value={cardTemplateDraft}
+					aria-label="Card template"
+					onchange={(event) =>
+						handleApplyTemplateToCard((event.currentTarget as HTMLSelectElement).value)}
+				>
+					<option value="">No template</option>
+					{#each templates as template (template.id)}
+						<option value={template.id}>{template.name}</option>
+					{/each}
+				</select>
+				<div class="template-status-row">
+					<span class:custom-state={cardTemplateStateDraft === 'custom'}
+						>{cardTemplateStatusLabel}</span
+					>
+					{#if cardTemplateStateDraft === 'custom'}
+						<div class="save-template-row">
+							<input
+								bind:value={saveTemplateNameDraft}
+								aria-label="New template name"
+								placeholder="New template name"
+							/>
+							<button
+								class="secondary-button compact"
+								type="button"
+								onclick={handleSaveCardAsTemplate}
+							>
+								<Check size={16} />
+								Save as template
+							</button>
+						</div>
+					{/if}
+				</div>
+			</section>
 		</div>
 
 		<footer class="dialog-footer">
@@ -2445,13 +3267,9 @@
 				<Trash2 size={17} />
 				Delete card
 			</button>
-			<button
-				class="primary-button"
-				type="button"
-				onclick={() => handleSaveCard({ closeAfterSave: true })}
-			>
+			<button class="primary-button" type="button" onclick={() => handleSaveCard()}>
 				<Check size={18} />
-				Save card
+				Save now
 			</button>
 		</footer>
 	</aside>

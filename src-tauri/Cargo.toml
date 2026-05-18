@@ -1,6 +1,6 @@
 [package]
 name = "LocalDeck"
-version = "0.3.1"
+version = "0.3.2"
 description = "Kanban. Local. Secure. Private."
 authors = ["Anthony Nunez"]
 license = "GNU General Public License v3.0"

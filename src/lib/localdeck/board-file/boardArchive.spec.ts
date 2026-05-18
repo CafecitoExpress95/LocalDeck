@@ -63,6 +63,14 @@ describe('LocalDeck .board archives', () => {
 		expect(strFromU8(archive['manifest.json'])).toContain('\n  "format": "localdeck-board"');
 		expect(cardJson.descriptionMarkdown).toBe('## Ship it\n- [ ] Validate archive');
 		expect(cardJson.comments).toHaveLength(1);
+		expect(cardJson.checklists[0]).toMatchObject({
+			id: 'checklist-release',
+			name: 'Release checklist'
+		});
+		expect(cardJson.checklists[0].items[1]).toMatchObject({
+			id: 'checklist-release-child',
+			parentId: 'checklist-release-parent'
+		});
 	});
 
 	it('validates archive references and warning-level physical card placement mismatches', async () => {
@@ -123,9 +131,33 @@ describe('LocalDeck .board archives', () => {
 		expect(loaded?.cards[0]).toMatchObject({
 			id: 'card-exporter',
 			stackId: 'stack-backlog',
-			descriptionMarkdown: '## Ship it\n- [ ] Validate archive'
+			descriptionMarkdown: '## Ship it\n- [ ] Validate archive',
+			checklists: snapshot.cards[0].checklists
 		});
 		expect(loaded?.cards[0].comments[0].bodyMarkdown).toBe('Raw **Markdown** comment');
+	});
+
+	it('rejects malformed checklist data before import', async () => {
+		expect.hasAssertions();
+
+		const snapshot = createSnapshot();
+		const archive = await exportedFiles(snapshot);
+		const card = JSON.parse(
+			strFromU8(archive['stacks/001_backlog/cards/001_create-exporter/card.json'])
+		) as CardRecord;
+		card.checklists[0].items[1].parentId = 'missing-item';
+		archive['stacks/001_backlog/cards/001_create-exporter/card.json'] = strToU8(
+			JSON.stringify(card, null, 2)
+		);
+
+		const result = validateBoardArchive(zipSync(archive));
+
+		expect(result.valid).toBe(false);
+		if (!result.valid) {
+			expect(result.errors.map((error) => error.message).join('\n')).toContain(
+				'parentId references missing checklist item missing-item'
+			);
+		}
 	});
 
 	it('imports the same archive as a copy without reusing colliding child IDs', async () => {
@@ -205,6 +237,7 @@ function createSnapshot(): BoardSnapshot {
 			descriptionMarkdown: '',
 			labelIds: [],
 			dates: [],
+			checklists: [],
 			customFields: {},
 			customFieldOrder: [],
 			createdAt: timestamp,
@@ -222,6 +255,35 @@ function createSnapshot(): BoardSnapshot {
 			descriptionMarkdown: '## Ship it\n- [ ] Validate archive',
 			labelIds: ['label-backend'],
 			dates: [{ id: 'date-due', type: 'due', label: 'Due', date: '2026-05-20' }],
+			checklists: [
+				{
+					id: 'checklist-release',
+					name: 'Release checklist',
+					items: [
+						{
+							id: 'checklist-release-parent',
+							label: 'Validate archive',
+							checked: true,
+							parentId: null,
+							position: 1000,
+							createdAt: timestamp,
+							updatedAt: timestamp
+						},
+						{
+							id: 'checklist-release-child',
+							label: 'Import copy',
+							checked: false,
+							parentId: 'checklist-release-parent',
+							position: 2000,
+							createdAt: timestamp,
+							updatedAt: timestamp
+						}
+					],
+					position: 1000,
+					createdAt: timestamp,
+					updatedAt: timestamp
+				}
+			],
 			customFields: { 'field-priority': 'p1' },
 			customFieldOrder: ['field-priority'],
 			comments: [

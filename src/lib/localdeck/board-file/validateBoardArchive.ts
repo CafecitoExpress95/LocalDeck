@@ -17,6 +17,8 @@ import type {
 	BoardArchiveValidationResult
 } from './boardArchiveTypes';
 import type {
+	CardChecklist,
+	CardChecklistItem,
 	CardComment,
 	CardDateEntry,
 	CardRecord,
@@ -24,7 +26,6 @@ import type {
 	CustomFieldDefinition,
 	CustomFieldOption,
 	CustomFieldType,
-	CustomFieldValue,
 	LabelRecord,
 	StackRecord
 } from '../types';
@@ -379,6 +380,7 @@ function validateCard(
 		errors,
 		warnings
 	);
+	validateChecklists(`card "${card.name}"`, card.checklists, errors);
 	if (!Array.isArray(card.comments)) {
 		errors.push({
 			message: `Import failed because card "${card.name}" comments must be an array.`
@@ -415,6 +417,7 @@ function validateTemplate(
 		errors,
 		warnings
 	);
+	validateChecklists(`template "${template.name}"`, template.checklists, errors);
 }
 
 function validateCustomField(
@@ -539,6 +542,109 @@ function validateComment(
 	requireString(comment, 'bodyMarkdown', `comment on card "${cardName}"`, errors);
 }
 
+function validateChecklists(
+	owner: string,
+	checklistsValue: unknown,
+	errors: BoardArchiveValidationIssue[]
+) {
+	if (checklistsValue === undefined) return;
+	if (!Array.isArray(checklistsValue)) {
+		errors.push({ message: `Import failed because ${owner} checklists must be an array.` });
+		return;
+	}
+
+	validateUnique(checklistsValue.filter(isObject) as CardChecklist[], `${owner} checklist`, errors);
+	for (const checklist of checklistsValue)
+		validateChecklist(checklist as CardChecklist, owner, errors);
+}
+
+function validateChecklist(
+	checklist: CardChecklist,
+	owner: string,
+	errors: BoardArchiveValidationIssue[]
+) {
+	if (!isObject(checklist)) {
+		errors.push({ message: `Import failed because ${owner} has an invalid checklist.` });
+		return;
+	}
+
+	const checklistOwner = `${owner} checklist "${checklist.name ?? checklist.id}"`;
+	requireString(checklist, 'id', checklistOwner, errors);
+	requireString(checklist, 'name', checklistOwner, errors);
+	requireNumber(checklist, 'position', checklistOwner, errors);
+	requireString(checklist, 'createdAt', checklistOwner, errors);
+	requireString(checklist, 'updatedAt', checklistOwner, errors);
+	if (!Array.isArray(checklist.items)) {
+		errors.push({ message: `Import failed because ${checklistOwner} items must be an array.` });
+		return;
+	}
+
+	const itemIds = validateUnique(
+		checklist.items.filter(isObject) as CardChecklistItem[],
+		`${checklistOwner} item`,
+		errors
+	);
+	for (const item of checklist.items) validateChecklistItem(item, checklistOwner, itemIds, errors);
+	validateChecklistParentLinks(checklist, checklistOwner, itemIds, errors);
+}
+
+function validateChecklistItem(
+	item: CardChecklistItem,
+	checklistOwner: string,
+	itemIds: Set<string>,
+	errors: BoardArchiveValidationIssue[]
+) {
+	if (!isObject(item)) {
+		errors.push({ message: `Import failed because ${checklistOwner} has an invalid item.` });
+		return;
+	}
+
+	const itemOwner = `${checklistOwner} item "${item.label ?? item.id}"`;
+	requireString(item, 'id', itemOwner, errors);
+	requireString(item, 'label', itemOwner, errors);
+	if (typeof item.checked !== 'boolean') {
+		errors.push({ message: `Import failed because ${itemOwner} checked must be boolean.` });
+	}
+	requireNullableString(item, 'parentId', itemOwner, errors);
+	if (typeof item.parentId === 'string' && !itemIds.has(item.parentId)) {
+		errors.push({
+			message: `Import failed because ${itemOwner} parentId references missing checklist item ${item.parentId}.`
+		});
+	}
+	requireNumber(item, 'position', itemOwner, errors);
+	requireString(item, 'createdAt', itemOwner, errors);
+	requireString(item, 'updatedAt', itemOwner, errors);
+}
+
+function validateChecklistParentLinks(
+	checklist: CardChecklist,
+	checklistOwner: string,
+	itemIds: Set<string>,
+	errors: BoardArchiveValidationIssue[]
+) {
+	const parents = new Map(
+		checklist.items
+			.filter((item) => isObject(item) && typeof item.id === 'string')
+			.map((item) => [item.id, typeof item.parentId === 'string' ? item.parentId : null])
+	);
+
+	for (const itemId of itemIds) {
+		const seen = new Set<string>([itemId]);
+		let parentId = parents.get(itemId) ?? null;
+
+		while (parentId) {
+			if (seen.has(parentId)) {
+				errors.push({
+					message: `Import failed because ${checklistOwner} item ${itemId} has a circular parentId chain.`
+				});
+				break;
+			}
+			seen.add(parentId);
+			parentId = parents.get(parentId) ?? null;
+		}
+	}
+}
+
 function validateOption(
 	option: CustomFieldOption,
 	fieldName: string,
@@ -608,7 +714,7 @@ function requireNumber(
 	}
 }
 
-function isObject(value: unknown): value is Record<string, CustomFieldValue> {
+function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 

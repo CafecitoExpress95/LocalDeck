@@ -5,9 +5,13 @@ import {
 	applyTemplateToCard,
 	cardTemplateFields,
 	createBlankTemplateRecord,
+	createChecklist,
+	createChecklistItem,
 	createTemplateFromCard,
 	customFieldInputValue,
 	emptyCustomFieldValue,
+	normalizeCardRecord,
+	normalizeChecklists,
 	normalizeCustomFieldOrder,
 	normalizeExplicitCustomFields,
 	normalizeCustomFieldValue,
@@ -32,6 +36,7 @@ describe('LocalDeck v0.2 model helpers', () => {
 			descriptionMarkdown: '',
 			labelIds: [],
 			dates: [],
+			checklists: [],
 			customFields: {},
 			customFieldOrder: [],
 			createdAt: timestamp,
@@ -50,6 +55,26 @@ describe('LocalDeck v0.2 model helpers', () => {
 			descriptionMarkdown: '## Steps',
 			labelIds: ['label-1'],
 			dates: [{ id: 'date-1', type: 'due', label: 'Due', date: '2026-06-01' }],
+			checklists: [
+				{
+					id: 'checklist-1',
+					name: 'QA',
+					items: [
+						{
+							id: 'item-1',
+							label: 'Smoke test',
+							checked: true,
+							parentId: null,
+							position: 1000,
+							createdAt: timestamp,
+							updatedAt: timestamp
+						}
+					],
+					position: 1000,
+					createdAt: timestamp,
+					updatedAt: timestamp
+				}
+			],
 			customFields: { field1: 'P1' },
 			customFieldOrder: ['field1'],
 			createdAt: timestamp,
@@ -69,11 +94,14 @@ describe('LocalDeck v0.2 model helpers', () => {
 			templateState: 'linked',
 			descriptionMarkdown: template.descriptionMarkdown,
 			labelIds: template.labelIds,
+			checklists: template.checklists,
 			customFields: template.customFields,
 			customFieldOrder: template.customFieldOrder,
 			createdAt: card.createdAt,
 			updatedAt: '2026-05-16T10:00:00.000Z'
 		});
+		expect(next.checklists).not.toBe(template.checklists);
+		expect(next.checklists[0].items).not.toBe(template.checklists[0].items);
 	});
 
 	it('normalizes custom field values according to field type and options', () => {
@@ -152,6 +180,16 @@ describe('LocalDeck v0.2 model helpers', () => {
 			descriptionMarkdown: 'Scope',
 			labelIds: [],
 			dates: [],
+			checklists: [
+				{
+					id: 'checklist-1',
+					name: 'Steps',
+					items: [],
+					position: 1000,
+					createdAt: timestamp,
+					updatedAt: timestamp
+				}
+			],
 			customFields: { priority: 'High' },
 			customFieldOrder: ['priority'],
 			createdAt: timestamp,
@@ -160,8 +198,11 @@ describe('LocalDeck v0.2 model helpers', () => {
 
 		expect(cardTemplateFields(template).customFields).toEqual({ priority: 'High' });
 		expect(cardTemplateFields(template).customFieldOrder).toEqual(['priority']);
+		expect(cardTemplateFields(template).checklists).toEqual(template.checklists);
+		expect(cardTemplateFields(template).checklists).not.toBe(template.checklists);
 		expect(cardTemplateFields(null).customFields).toEqual({});
 		expect(cardTemplateFields(null).customFieldOrder).toEqual([]);
+		expect(cardTemplateFields(null).checklists).toEqual([]);
 	});
 
 	it('normalizes custom field order while preserving explicit order first', () => {
@@ -194,6 +235,26 @@ describe('LocalDeck v0.2 model helpers', () => {
 			descriptionMarkdown: 'New description',
 			labelIds: ['label-1'],
 			dates: [{ id: 'due-1', type: 'due', label: 'Due', date: '2026-06-01' }],
+			checklists: [
+				{
+					id: 'checklist-template',
+					name: 'Definition',
+					items: [
+						{
+							id: 'template-item',
+							label: 'Template task',
+							checked: false,
+							parentId: null,
+							position: 1000,
+							createdAt: timestamp,
+							updatedAt: timestamp
+						}
+					],
+					position: 1000,
+					createdAt: timestamp,
+					updatedAt: timestamp
+				}
+			],
 			customFields: { status: 'Todo', priority: 'Template default', estimate: 8 },
 			customFieldOrder: ['status', 'priority', 'estimate'],
 			createdAt: timestamp,
@@ -207,6 +268,7 @@ describe('LocalDeck v0.2 model helpers', () => {
 			templateState: 'linked',
 			descriptionMarkdown: 'New description',
 			labelIds: ['label-1'],
+			checklists: template.checklists,
 			customFields: {
 				status: 'Todo',
 				priority: 'Card value',
@@ -225,6 +287,26 @@ describe('LocalDeck v0.2 model helpers', () => {
 		card.descriptionMarkdown = 'Card notes';
 		card.labelIds = ['label-1'];
 		card.dates = [{ id: 'date-1', type: 'milestone', label: 'Gate', date: '2026-07-01' }];
+		card.checklists = [
+			{
+				id: 'checklist-card',
+				name: 'Launch',
+				items: [
+					{
+						id: 'item-card',
+						label: 'Publish',
+						checked: true,
+						parentId: null,
+						position: 1000,
+						createdAt: timestamp,
+						updatedAt: timestamp
+					}
+				],
+				position: 1000,
+				createdAt: timestamp,
+				updatedAt: timestamp
+			}
+		];
 		card.customFields = { priority: 'Card value', estimate: 5 };
 		card.customFieldOrder = ['estimate', 'priority'];
 
@@ -241,6 +323,7 @@ describe('LocalDeck v0.2 model helpers', () => {
 			name: 'Saved custom card',
 			descriptionMarkdown: 'Card notes',
 			labelIds: ['label-1'],
+			checklists: card.checklists,
 			customFields: { priority: 'Card value', estimate: 5 },
 			customFieldOrder: ['estimate', 'priority'],
 			createdAt: '2026-05-16T10:00:00.000Z',
@@ -248,6 +331,9 @@ describe('LocalDeck v0.2 model helpers', () => {
 		});
 		expect(template.dates).toEqual(card.dates);
 		expect(template.dates).not.toBe(card.dates);
+		expect(template.checklists).toEqual(card.checklists);
+		expect(template.checklists).not.toBe(card.checklists);
+		expect(template.checklists[0].items).not.toBe(card.checklists[0].items);
 	});
 
 	it('creates empty values for newly added custom fields', () => {
@@ -274,6 +360,72 @@ describe('LocalDeck v0.2 model helpers', () => {
 		expect(fieldCleaned.customFieldOrder).toEqual(['keep']);
 		expect(labelCleaned.labelIds).toEqual(['keep-label']);
 	});
+
+	it('normalizes missing, invalid, and cyclic checklist data safely', () => {
+		expect.hasAssertions();
+
+		const card = createCard();
+		delete (card as Partial<CardRecord>).checklists;
+
+		expect(normalizeCardRecord(card).checklists).toEqual([]);
+		expect(
+			normalizeChecklists([
+				{
+					id: 'checklist-1',
+					name: '',
+					items: [
+						createChecklistItem('Parent', null, 1000, timestamp, 'parent'),
+						createChecklistItem('Child', 'parent', 2000, timestamp, 'child'),
+						createChecklistItem('Broken', 'missing', 3000, timestamp, 'broken'),
+						{
+							...createChecklistItem('Cycle A', 'cycle-b', 4000, timestamp, 'cycle-a')
+						},
+						{
+							...createChecklistItem('Cycle B', 'cycle-a', 5000, timestamp, 'cycle-b')
+						}
+					],
+					position: Number.NaN,
+					createdAt: timestamp,
+					updatedAt: timestamp
+				}
+			])
+		).toMatchObject([
+			{
+				id: 'checklist-1',
+				name: 'Checklist',
+				position: 1000,
+				items: [
+					{ id: 'parent', parentId: null },
+					{ id: 'child', parentId: 'parent' },
+					{ id: 'broken', parentId: null },
+					{ id: 'cycle-a', parentId: null },
+					{ id: 'cycle-b', parentId: null }
+				]
+			}
+		]);
+	});
+
+	it('creates checklist records and items with stable defaults', () => {
+		expect.hasAssertions();
+
+		expect(createChecklist('', 1000, timestamp, 'checklist-1')).toMatchObject({
+			id: 'checklist-1',
+			name: 'Checklist',
+			items: [],
+			position: 1000,
+			createdAt: timestamp,
+			updatedAt: timestamp
+		});
+		expect(createChecklistItem('Draft', null, 1000, timestamp, 'item-1')).toMatchObject({
+			id: 'item-1',
+			label: 'Draft',
+			checked: false,
+			parentId: null,
+			position: 1000,
+			createdAt: timestamp,
+			updatedAt: timestamp
+		});
+	});
 });
 
 function createCard(): CardRecord {
@@ -287,6 +439,7 @@ function createCard(): CardRecord {
 		descriptionMarkdown: 'Old description',
 		labelIds: [],
 		dates: [],
+		checklists: [],
 		customFields: {},
 		customFieldOrder: [],
 		comments: [

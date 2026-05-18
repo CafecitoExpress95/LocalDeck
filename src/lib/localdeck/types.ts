@@ -33,6 +33,25 @@ export type CardDateEntry = {
 	date: string;
 };
 
+export type CardChecklistItem = {
+	id: string;
+	label: string;
+	checked: boolean;
+	parentId: string | null;
+	position: number;
+	createdAt: ISODateString;
+	updatedAt: ISODateString;
+};
+
+export type CardChecklist = {
+	id: string;
+	name: string;
+	items: CardChecklistItem[];
+	position: number;
+	createdAt: ISODateString;
+	updatedAt: ISODateString;
+};
+
 export type CustomFieldType =
 	| 'text'
 	| 'multiline'
@@ -78,6 +97,7 @@ export type CardTemplateRecord = {
 	descriptionMarkdown: string;
 	labelIds: string[];
 	dates: CardDateEntry[];
+	checklists: CardChecklist[];
 	customFields: Record<string, CustomFieldValue>;
 	customFieldOrder: string[];
 	createdAt: ISODateString;
@@ -96,6 +116,7 @@ export type CardRecord = {
 	descriptionMarkdown: string;
 	labelIds: string[];
 	dates: CardDateEntry[];
+	checklists: CardChecklist[];
 	customFields: Record<string, CustomFieldValue>;
 	customFieldOrder: string[];
 	comments: CardComment[];

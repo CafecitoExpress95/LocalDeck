@@ -14,7 +14,7 @@
 <div align="center">
 
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-2f855a.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.1--CA-7c3aed)](package.json)
+[![Version](https://img.shields.io/badge/version-0.3.2--CA-7c3aed)](package.json)
 [![Latest Release](https://img.shields.io/github/v/release/CafecitoExpress95/LocalDeck?include_prereleases&label=release)](https://github.com/CafecitoExpress95/LocalDeck/releases)
 [![Platform Support](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-2563eb)](#desktop-support)
 
@@ -37,7 +37,7 @@
 
 ## About LocalDeck
 
-LocalDeck is a local-first Kanban application for organizing boards, lists, cards, templates, custom fields, and project notes without requiring an account or cloud backend.
+LocalDeck is a local-first Kanban application for organizing boards, lists, cards, checklists, templates, custom fields, and project notes without requiring an account or cloud backend.
 
 The project is intentionally built around a few clear principles:
 
@@ -64,7 +64,11 @@ Organize work into flexible Kanban lists such as `Backlog`, `In Progress`, `Revi
 
 ### Cards
 
-Cards hold the details of the work: titles, descriptions, comments, labels, structured values, and project context. Markdown rendering is supported for richer card notes.
+Cards hold the details of the work: titles, descriptions, comments, labels, checklists, structured values, and project context. Markdown rendering is supported for richer card notes.
+
+### Checklists
+
+Add named checklists to cards, organize checklist items into nested parent and child outlines, reorder checklist work in place, and track progress from the board while keeping the data local and portable.
 
 ### Templates
 

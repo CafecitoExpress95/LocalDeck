@@ -8,6 +8,27 @@ All current LocalDeck releases are closed alpha releases. This changelog tracks 
 
 Stable public milestones are expected to follow the closed alpha sequence, such as `0.3-CA`, `0.4-CA`, `0.5-CA`, and later milestones as the project matures. `1.0` will represent the first stable public release target.
 
+## 0.3.2-CA - 2026-05-18
+
+`0.3.2-CA` adds first-class card checklists and a safer card editing flow. Cards can now track nested checklist work directly in the local card model, and closing a card saves draft edits to help prevent accidental work loss.
+
+### Added
+
+- Added named checklists to cards, with checkbox items and labels stored as structured card data.
+- Added nested checklist item organization with outline-style keyboard editing for `Enter`, `Tab`, `Shift+Tab`, and start-of-item `Backspace`.
+- Added checklist support to card templates, board card progress summaries, `.board` archive export/import, and archive validation.
+- Added checklist item reordering so parent items move with their children and child items reorder only within the same parent.
+
+### Changed
+
+- Reordered the card dialog sections to show labels, description, dates, custom fields, checklists, and comments in the intended review order.
+- Closing a card now saves draft edits before closing; the Save button remains available as an explicit save-now action.
+
+### Stability
+
+- Added regression coverage for checklist normalization, template copying and application, and archive round trips.
+- Validated with Svelte check, Vite build, and targeted Vitest server tests.
+
 ## 0.3.1-CA - 2026-05-16
 
 `0.3.1-CA` is a stability release for the `0.3-CA` line. It focuses on custom-field correctness, safer option editing, and clearer recovery when local persistence operations fail.
