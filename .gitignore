@@ -24,3 +24,7 @@ src-tauri/gen/
 Thumbs.db
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Documents
+docs/.assets
+docs/LocalDeck_IT-OnePager.docx
