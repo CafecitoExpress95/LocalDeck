@@ -1,7 +1,7 @@
 {
 	"name": "localdeck",
 	"private": true,
-	"version": "0.3-CA",
+	"version": "0.3.1-CA",
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",

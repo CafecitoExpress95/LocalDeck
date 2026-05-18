@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "LocalDeck",
-  "version": "0.1.0",
-  "identifier": "com.cafecitoexpress95.localdeck",
+  "version": "0.3.1-CA",
+  "identifier": "com.tauri.dev",
   "build": {
     "frontendDist": "../build",
     "devUrl": "http://localhost:5173",
