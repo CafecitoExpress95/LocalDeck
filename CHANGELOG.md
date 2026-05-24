@@ -8,6 +8,28 @@ All current LocalDeck releases are closed alpha releases. This changelog tracks 
 
 Stable public milestones are expected to follow the closed alpha sequence, such as `0.3-CA`, `0.4-CA`, `0.5-CA`, and later milestones as the project matures. `1.0` will represent the first stable public release target.
 
+## 0.3.3-CA - 2026-05-24
+
+`0.3.3-CA` finishes the v0.3 card-structure workflow with safer board export, better checklist editing, card context actions, reorderable labels, and copy/paste support for reusable card elements.
+
+### Added
+
+- Added a desktop save-as flow for `.board` exports, with a browser download fallback for non-desktop contexts.
+- Added a card right-click menu for moving, duplicating, and deleting cards from the board.
+- Added drag-and-drop label ordering so label management, card/template selection, and card face display use the same visual order.
+- Added app-local copy/paste for card dates and individual checklists between cards.
+- Added paste support for copied card dates and checklists in card templates.
+
+### Fixed
+
+- Fixed checklist `Tab` indentation so an item indents by one level instead of jumping under a deeply nested previous item.
+- Fixed full card stacks so card lists scroll while cards keep a reasonable content-driven minimum height.
+
+### Stability
+
+- Added and updated regression coverage for label ordering, board archives, card duplication, checklist copy/paste, and date copy/paste behavior.
+- Validated with Svelte check, Vite build, and targeted LocalDeck Vitest tests.
+
 ## 0.3.2-CA - 2026-05-18
 
 `0.3.2-CA` adds first-class card checklists and a safer card editing flow. Cards can now track nested checklist work directly in the local card model, and closing a card saves draft edits to help prevent accidental work loss.

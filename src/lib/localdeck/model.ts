@@ -9,7 +9,8 @@ import type {
 	CardTemplateState,
 	CustomFieldDefinition,
 	CustomFieldOption,
-	CustomFieldValue
+	CustomFieldValue,
+	LabelRecord
 } from './types';
 
 const emptyCardFields = {
@@ -240,6 +241,35 @@ export function normalizeCardRecord(card: CardRecord): CardRecord {
 	};
 }
 
+export function normalizeLabelRecord(label: LabelRecord, index = 0): LabelRecord {
+	return {
+		...label,
+		position: finitePosition((label as { position?: unknown }).position, index)
+	};
+}
+
+export function normalizeLabelRecords(labels: LabelRecord[]): LabelRecord[] {
+	const fallbackPositions = new Map(
+		[...labels]
+			.sort(
+				(left, right) =>
+					left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
+			)
+			.map((label, index) => [label.id, finitePosition(undefined, index)])
+	);
+
+	return labels.map((label, index) => {
+		const position = (label as { position?: unknown }).position;
+		return {
+			...label,
+			position:
+				typeof position === 'number' && Number.isFinite(position)
+					? position
+					: (fallbackPositions.get(label.id) ?? finitePosition(position, index))
+		};
+	});
+}
+
 export function removeCustomFieldValues<
 	T extends { customFields: Record<string, CustomFieldValue>; customFieldOrder?: string[] }
 >(items: T[], fieldId: string) {
@@ -268,6 +298,38 @@ export function removeLabelReferences<T extends { labelIds: string[] }>(
 
 export function copyDateEntry(date: CardDateEntry): CardDateEntry {
 	return { ...date };
+}
+
+export function copyDateEntriesWithFreshIds(dates: CardDateEntry[]): CardDateEntry[] {
+	return dates.map(copyDateEntryWithFreshId);
+}
+
+export function duplicateCardRecord(
+	card: CardRecord,
+	position: number,
+	timestamp: string,
+	id: string = nanoid()
+): CardRecord {
+	const normalizedCard = normalizeCardRecord(card);
+
+	return {
+		...normalizedCard,
+		id,
+		name: `${normalizedCard.name} (Copy)`,
+		dates: normalizedCard.dates.map(copyDateEntryWithFreshId),
+		checklists: duplicateChecklistsWithFreshIds(normalizedCard.checklists, timestamp),
+		customFields: copyCustomFieldValues(normalizedCard.customFields),
+		customFieldOrder: [...normalizedCard.customFieldOrder],
+		comments: normalizedCard.comments.map((comment) => ({
+			...comment,
+			id: nanoid(),
+			createdAt: timestamp,
+			updatedAt: timestamp
+		})),
+		position,
+		createdAt: timestamp,
+		updatedAt: timestamp
+	};
 }
 
 export function createChecklist(
@@ -309,6 +371,52 @@ export function copyChecklists(checklists: CardChecklist[]): CardChecklist[] {
 		...checklist,
 		items: checklist.items.map((item) => ({ ...item }))
 	}));
+}
+
+export function copyChecklistWithFreshIds(
+	checklist: CardChecklist,
+	position: number,
+	timestamp: string
+): CardChecklist {
+	const [copy] = duplicateChecklistsWithFreshIds([checklist], timestamp);
+
+	return { ...copy, position };
+}
+
+function copyDateEntryWithFreshId(date: CardDateEntry): CardDateEntry {
+	return { ...date, id: nanoid() };
+}
+
+function duplicateChecklistsWithFreshIds(
+	checklists: CardChecklist[],
+	timestamp: string
+): CardChecklist[] {
+	return normalizeChecklists(checklists).map((checklist) => {
+		const itemIdMap = new Map(checklist.items.map((item) => [item.id, nanoid()]));
+
+		return {
+			...checklist,
+			id: nanoid(),
+			items: checklist.items.map((item) => ({
+				...item,
+				id: itemIdMap.get(item.id) ?? nanoid(),
+				parentId: item.parentId ? (itemIdMap.get(item.parentId) ?? null) : null,
+				createdAt: timestamp,
+				updatedAt: timestamp
+			})),
+			createdAt: timestamp,
+			updatedAt: timestamp
+		};
+	});
+}
+
+function copyCustomFieldValues(customFields: Record<string, CustomFieldValue>) {
+	return Object.fromEntries(
+		Object.entries(customFields).map(([fieldId, value]) => [
+			fieldId,
+			Array.isArray(value) ? [...value] : value
+		])
+	);
 }
 
 export function normalizeChecklists(checklists: unknown): CardChecklist[] {
@@ -400,6 +508,22 @@ export function checklistDisplayItems(
 	};
 	visit(null, 0);
 	return display;
+}
+
+export function checklistIndentParentId(
+	checklist: Pick<CardChecklist, 'items'>,
+	itemId: string
+): string | undefined {
+	const display = checklistDisplayItems(checklist);
+	const index = display.findIndex((entry) => entry.item.id === itemId);
+	if (index <= 0) return undefined;
+
+	const current = display[index];
+	for (let previousIndex = index - 1; previousIndex >= 0; previousIndex -= 1) {
+		const candidate = display[previousIndex];
+		if (candidate.depth === current.depth) return candidate.item.id;
+	}
+	return undefined;
 }
 
 export function checklistProgress(checklists: CardChecklist[]) {

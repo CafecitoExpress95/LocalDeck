@@ -29,6 +29,7 @@ import type {
 	LabelRecord,
 	StackRecord
 } from '../types';
+import { normalizeLabelRecords } from '../model';
 
 type ArchiveFiles = Record<string, Uint8Array>;
 type ParsedObject<T> = { path: string; value: T };
@@ -103,7 +104,7 @@ export function validateBoardArchive(
 		cards: cardObjects.map((item) => item.value),
 		templates: templates.map((item) => item.value),
 		customFields: customFields.map((item) => item.value),
-		labels: labels.map((item) => item.value),
+		labels: normalizeDiscoveredLabels(labels, warnings),
 		exportInfo: exportInfo ?? undefined
 	};
 
@@ -456,8 +457,27 @@ function validateLabel(label: LabelRecord, boardId: string, errors: BoardArchive
 	requireBoardId(label, boardId, `label "${label.name ?? label.id}"`, errors);
 	requireString(label, 'name', 'label', errors);
 	requireString(label, 'color', 'label', errors);
+	requireNumber(label, 'position', 'label', errors);
 	requireString(label, 'createdAt', 'label', errors);
 	requireString(label, 'updatedAt', 'label', errors);
+}
+
+function normalizeDiscoveredLabels(
+	labels: ParsedObject<LabelRecord>[],
+	warnings: BoardArchiveValidationIssue[]
+) {
+	const fallbackLabels = normalizeLabelRecords(labels.map((label) => label.value));
+
+	return labels.map((label, index) => {
+		if (!Object.prototype.hasOwnProperty.call(label.value, 'position')) {
+			warnings.push({
+				path: label.path,
+				message: `Import warning: label "${label.value.name || label.value.id}" is missing position; LocalDeck restored label order from creation time.`
+			});
+			return fallbackLabels[index];
+		}
+		return label.value;
+	});
 }
 
 function validateStructuredFields(

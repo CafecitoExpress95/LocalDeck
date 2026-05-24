@@ -1,6 +1,14 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { dndzone } from 'svelte-dnd-action';
+	import { invoke, isTauri } from '@tauri-apps/api/core';
+	import { save as saveDialog } from '@tauri-apps/plugin-dialog';
+	import {
+		SHADOW_ITEM_MARKER_PROPERTY_NAME,
+		SHADOW_PLACEHOLDER_ITEM_ID,
+		dndzone,
+		dragHandle,
+		dragHandleZone
+	} from 'svelte-dnd-action';
 	import {
 		ArrowLeft,
 		ArrowDown,
@@ -8,12 +16,15 @@
 		CalendarDays,
 		Check,
 		Columns3,
+		Copy,
 		Download,
 		FileArchive,
+		GripVertical,
 		LayoutDashboard,
 		ListChecks,
 		MessageSquare,
 		Minus,
+		MoveRight,
 		PanelTop,
 		Plus,
 		Settings2,
@@ -33,8 +44,12 @@
 	} from '$lib/localdeck/board-file/boardArchiveTypes';
 	import {
 		checklistDisplayItems,
+		checklistIndentParentId,
 		checklistProgress,
+		copyChecklistWithFreshIds,
 		copyChecklists,
+		copyDateEntriesWithFreshIds,
+		copyDateEntry,
 		createChecklist,
 		createChecklistItem,
 		customFieldInputValue,
@@ -62,14 +77,17 @@
 		deleteLabel,
 		deleteStack,
 		deleteTemplate,
+		duplicateCard,
 		getLastBoardId,
 		importBoardSnapshot,
 		labelColors,
 		listBoards,
 		loadBoard,
+		moveCardToStack,
 		renameBoard,
 		renameStack,
 		reorderCards,
+		reorderLabels,
 		reorderStacks,
 		saveCardAsTemplate,
 		setDefaultTemplate,
@@ -114,6 +132,22 @@
 		warnings: BoardArchiveValidationIssue[];
 	};
 
+	type CardContextMenu = {
+		cardId: string;
+		x: number;
+		y: number;
+		moveOpen: boolean;
+	};
+
+	type LabelDndItem = LabelRecord & {
+		[SHADOW_ITEM_MARKER_PROPERTY_NAME]?: boolean;
+	};
+
+	type CardElementCopyBuffer =
+		| { type: 'dates'; dates: CardDateEntry[] }
+		| { type: 'checklist'; checklist: CardChecklist }
+		| null;
+
 	const appVersion = packageJson.version;
 	const availableLabelColors = labelColors();
 	const now = () => new Date().toISOString();
@@ -144,6 +178,8 @@
 	let labels: LabelRecord[] = [];
 	let selectedCardId: string | null = null;
 	let boardView: 'board' | 'templates' = 'board';
+	let cardContextMenu: CardContextMenu | null = null;
+	let cardElementCopyBuffer: CardElementCopyBuffer = null;
 
 	let newBoardName = '';
 	let newStackName = '';
@@ -198,15 +234,23 @@
 	let newLabelName = '';
 	let newLabelColor = availableLabelColors[0];
 	let labelDrafts: Record<string, LabelDraft> = {};
+	let labelDndSource: LabelRecord | null = null;
 
 	$: selectedCard = cards.find((card) => card.id === selectedCardId) ?? null;
 	$: selectedTemplate = templates.find((template) => template.id === selectedTemplateId) ?? null;
+	$: contextMenuCard = cardContextMenu
+		? (cards.find((card) => card.id === cardContextMenu?.cardId) ?? null)
+		: null;
+	$: contextMenuStack = contextMenuCard
+		? (stacks.find((stack) => stack.id === contextMenuCard.stackId) ?? null)
+		: null;
 	$: selectedCardTemplate = templates.find((template) => template.id === cardTemplateDraft) ?? null;
 	$: cardTemplateStatusLabel =
 		cardTemplateStateDraft === 'linked' && selectedCardTemplate
 			? `Linked to ${selectedCardTemplate.name}`
 			: 'Custom';
-	$: labelMap = new Map(labels.map((label) => [label.id, label]));
+	$: visibleLabels = labels.filter((label) => !isShadowLabel(label as LabelDndItem));
+	$: labelMap = new Map(visibleLabels.map((label) => [label.id, label]));
 	$: customFieldMap = new Map(customFields.map((field) => [field.id, field]));
 	$: cardsByStack = stacks.reduce<Record<string, CardRecord[]>>((grouped, stack) => {
 		grouped[stack.id] = cards
@@ -304,6 +348,7 @@
 			snapshot.labels.map((label) => [label.id, { name: label.name, color: label.color }])
 		);
 		selectedCardId = null;
+		closeCardContextMenu();
 		selectedTemplateId = snapshot.templates[0]?.id ?? null;
 		if (selectedTemplate) syncTemplateDrafts(selectedTemplate);
 		await setLastBoardId(boardId);
@@ -317,6 +362,7 @@
 		customFields = [];
 		labels = [];
 		selectedCardId = null;
+		closeCardContextMenu();
 		selectedTemplateId = null;
 		boardView = 'board';
 	}
@@ -345,6 +391,7 @@
 		labelDrafts = Object.fromEntries(
 			snapshot.labels.map((label) => [label.id, { name: label.name, color: label.color }])
 		);
+		closeCardContextMenu();
 		selectedCardId = cardIdToKeepOpen;
 
 		const card = snapshot.cards.find((item) => item.id === cardIdToKeepOpen);
@@ -435,17 +482,55 @@
 				}
 
 				const { blob, filename } = exportBoardArchive(snapshot, appVersion);
-				const url = URL.createObjectURL(blob);
-				const link = document.createElement('a');
-				link.href = url;
-				link.download = filename;
-				link.click();
-				URL.revokeObjectURL(url);
-				setBoardFileMessage('success', `Exported ${filename}.`);
+				const result = await saveBoardArchive(blob, filename);
+				if (result.status === 'canceled') return;
+				setBoardFileMessage('success', `Exported ${result.filename}.`);
 			},
 			'Export failed.',
 			selectedCardId
 		);
+	}
+
+	async function saveBoardArchive(
+		blob: Blob,
+		filename: string
+	): Promise<{ status: 'saved'; filename: string } | { status: 'canceled' }> {
+		if (isTauri()) {
+			const selectedPath = await saveDialog({
+				title: 'Export LocalDeck board',
+				defaultPath: filename,
+				filters: [{ name: 'LocalDeck board', extensions: ['board'] }]
+			});
+			if (!selectedPath) return { status: 'canceled' };
+
+			const exportPath = boardFilePath(selectedPath);
+			const bytes = new Uint8Array(await blob.arrayBuffer());
+			await invoke('write_board_archive', {
+				path: exportPath,
+				bytes: Array.from(bytes)
+			});
+			return { status: 'saved', filename: boardFileName(exportPath) };
+		}
+
+		downloadBoardArchive(blob, filename);
+		return { status: 'saved', filename };
+	}
+
+	function boardFilePath(path: string) {
+		return path.toLowerCase().endsWith('.board') ? path : `${path}.board`;
+	}
+
+	function boardFileName(path: string) {
+		return path.split(/[\\/]/).pop() || path;
+	}
+
+	function downloadBoardArchive(blob: Blob, filename: string) {
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement('a');
+		link.href = url;
+		link.download = filename;
+		link.click();
+		URL.revokeObjectURL(url);
 	}
 
 	function handleImportBoardClick() {
@@ -597,8 +682,93 @@
 	}
 
 	function openCard(card: CardRecord) {
+		closeCardContextMenu();
 		selectedCardId = card.id;
 		syncCardDrafts(card);
+	}
+
+	function handleCardContextMenu(card: CardRecord, event: MouseEvent) {
+		event.preventDefault();
+		event.stopPropagation();
+		const { x, y } = constrainedMenuPosition(event);
+		cardContextMenu = { cardId: card.id, x, y, moveOpen: false };
+	}
+
+	function constrainedMenuPosition(event: MouseEvent) {
+		const margin = 8;
+		const menuWidth = 240;
+		const menuHeight = Math.min(340, 142 + stacks.length * 38);
+		return {
+			x: Math.max(margin, Math.min(event.clientX, window.innerWidth - menuWidth - margin)),
+			y: Math.max(margin, Math.min(event.clientY, window.innerHeight - menuHeight - margin))
+		};
+	}
+
+	function closeCardContextMenu() {
+		cardContextMenu = null;
+	}
+
+	function handleWindowClick() {
+		closeCardContextMenu();
+	}
+
+	function handleWindowKeydown(event: KeyboardEvent) {
+		if (event.key === 'Escape') closeCardContextMenu();
+	}
+
+	function toggleContextMoveMenu(event: MouseEvent) {
+		event.stopPropagation();
+		if (!cardContextMenu) return;
+		cardContextMenu = { ...cardContextMenu, moveOpen: !cardContextMenu.moveOpen };
+	}
+
+	async function handleContextDuplicateCard() {
+		if (!contextMenuCard) return;
+		const cardId = contextMenuCard.id;
+		closeCardContextMenu();
+
+		await persistAction(
+			async () => {
+				const copy = await duplicateCard(cardId);
+				await reloadCurrentBoard(null);
+				if (copy) setBoardFileMessage('success', `Duplicated "${copy.name}".`);
+			},
+			'Card duplication failed.',
+			null
+		);
+	}
+
+	async function handleContextMoveCard(stackId: string) {
+		if (!contextMenuCard) return;
+		const cardId = contextMenuCard.id;
+		closeCardContextMenu();
+
+		await persistAction(
+			async () => {
+				const moved = await moveCardToStack(cardId, stackId);
+				await reloadCurrentBoard(null);
+				const stack = stacks.find((item) => item.id === stackId);
+				if (moved && stack)
+					setBoardFileMessage('success', `Moved "${moved.name}" to ${stack.name}.`);
+			},
+			'Card move failed.',
+			null
+		);
+	}
+
+	async function handleContextDeleteCard() {
+		if (!contextMenuCard || !confirm(`Delete "${contextMenuCard.name}"?`)) return;
+		const cardId = contextMenuCard.id;
+		closeCardContextMenu();
+
+		await persistAction(
+			async () => {
+				await deleteCard(cardId);
+				await reloadCurrentBoard(null);
+			},
+			'Card deletion failed.',
+			null
+		);
 	}
 
 	function syncCardDrafts(card: CardRecord) {
@@ -937,6 +1107,63 @@
 		}, 'Label deletion failed.');
 	}
 
+	function handleLabelConsider(event: Event) {
+		captureLabelDndSource(event);
+		labels = dndItems<LabelDndItem>(event);
+	}
+
+	async function handleLabelFinalize(event: Event) {
+		if (!currentBoard) return;
+		const boardId = currentBoard.id;
+		captureLabelDndSource(event);
+		const nextLabels = normalizeLabelDndItems(event);
+		labelDndSource = null;
+		labels = nextLabels;
+		await persistAction(
+			async () => {
+				labels = await reorderLabels(boardId, nextLabels);
+			},
+			'Label reorder failed.',
+			selectedCardId
+		);
+	}
+
+	function captureLabelDndSource(event: Event) {
+		const draggedId = dndInfo(event).id;
+		if (!draggedId) return;
+		const source = labels.find((label) => label.id === draggedId);
+		if (source && !isShadowLabel(source as LabelDndItem)) labelDndSource = source;
+	}
+
+	function normalizeLabelDndItems(event: Event) {
+		const draggedId = dndInfo(event).id ?? labelDndSource?.id;
+		const seen = new Set<string>();
+
+		return dndItems<LabelDndItem>(event).flatMap((label) => {
+			const item = isShadowLabel(label)
+				? labelDndSource
+					? { ...labelDndSource }
+					: draggedId
+						? stripLabelDndMetadata({ ...label, id: draggedId })
+						: null
+				: stripLabelDndMetadata(label);
+			if (!item || seen.has(item.id)) return [];
+			seen.add(item.id);
+			return [item];
+		});
+	}
+
+	function stripLabelDndMetadata(label: LabelDndItem): LabelRecord {
+		const { [SHADOW_ITEM_MARKER_PROPERTY_NAME]: _shadow, ...record } = label;
+		return record;
+	}
+
+	function isShadowLabel(label: LabelDndItem) {
+		return (
+			Boolean(label[SHADOW_ITEM_MARKER_PROPERTY_NAME]) || label.id === SHADOW_PLACEHOLDER_ITEM_ID
+		);
+	}
+
 	function addCardDate() {
 		if (!newCardDateDate) return;
 		cardDatesDraft = [
@@ -955,6 +1182,59 @@
 		];
 		newTemplateDateDate = '';
 		newTemplateDateLabel = '';
+	}
+
+	function copyCardDates() {
+		if (cardDatesDraft.length === 0) return;
+		cardElementCopyBuffer = { type: 'dates', dates: cardDatesDraft.map(copyDateEntry) };
+	}
+
+	function pasteDatesIntoCard() {
+		if (cardElementCopyBuffer?.type !== 'dates') return;
+		cardDatesDraft = [
+			...cardDatesDraft,
+			...copyDateEntriesWithFreshIds(cardElementCopyBuffer.dates)
+		];
+		markCardStructureCustom();
+	}
+
+	function pasteDatesIntoTemplate() {
+		if (cardElementCopyBuffer?.type !== 'dates') return;
+		templateDatesDraft = [
+			...templateDatesDraft,
+			...copyDateEntriesWithFreshIds(cardElementCopyBuffer.dates)
+		];
+	}
+
+	function copyCardChecklist(checklist: CardChecklist) {
+		const [copy] = copyChecklists([checklist]);
+		if (!copy) return;
+		cardElementCopyBuffer = { type: 'checklist', checklist: copy };
+	}
+
+	function pasteChecklistIntoCard() {
+		if (cardElementCopyBuffer?.type !== 'checklist') return;
+		cardChecklistsDraft = [
+			...cardChecklistsDraft,
+			copyChecklistWithFreshIds(
+				cardElementCopyBuffer.checklist,
+				(cardChecklistsDraft.length + 1) * 1000,
+				now()
+			)
+		];
+		markCardStructureCustom();
+	}
+
+	function pasteChecklistIntoTemplate() {
+		if (cardElementCopyBuffer?.type !== 'checklist') return;
+		templateChecklistsDraft = [
+			...templateChecklistsDraft,
+			copyChecklistWithFreshIds(
+				cardElementCopyBuffer.checklist,
+				(templateChecklistsDraft.length + 1) * 1000,
+				now()
+			)
+		];
 	}
 
 	function handleDateLabelKeydown(event: KeyboardEvent, addDate: () => void) {
@@ -1434,13 +1714,11 @@
 		checklist: CardChecklist,
 		itemId: string
 	) {
-		const display = checklistDisplayItems(checklist);
-		const index = display.findIndex((entry) => entry.item.id === itemId);
-		const previous = display[index - 1]?.item;
-		if (!previous) return null;
+		const parentId = checklistIndentParentId(checklist, itemId);
+		if (!parentId) return null;
 		return {
 			checklists: updateChecklistItemDraft(checklists, checklist.id, itemId, {
-				parentId: previous.id
+				parentId
 			}),
 			focusItemId: itemId
 		};
@@ -1636,6 +1914,11 @@
 		return next;
 	}
 
+	function orderedLabelIds(labelIds: string[]) {
+		const selectedIds = new Set(labelIds);
+		return visibleLabels.map((label) => label.id).filter((labelId) => selectedIds.has(labelId));
+	}
+
 	function fieldToDraft(field: CustomFieldDefinition): FieldDraft {
 		return {
 			name: field.name,
@@ -1710,6 +1993,10 @@
 		return (event as CustomEvent<{ items: T[] }>).detail.items;
 	}
 
+	function dndInfo(event: Event) {
+		return (event as CustomEvent<{ info?: { id?: string } }>).detail.info ?? {};
+	}
+
 	function handleStackConsider(event: Event) {
 		stacks = dndItems<StackRecord>(event);
 	}
@@ -1765,6 +2052,8 @@
 	<meta name="description" content="A local-first Kanban board for fast offline planning." />
 </svelte:head>
 
+<svelte:window onclick={handleWindowClick} onkeydown={handleWindowKeydown} />
+
 <input
 	bind:this={boardFileInput}
 	class="sr-only"
@@ -1797,6 +2086,54 @@
 			<X size={16} />
 		</button>
 	</aside>
+{/if}
+
+{#if cardContextMenu && contextMenuCard}
+	<div
+		class="card-context-menu"
+		role="menu"
+		aria-label={`Card actions for ${contextMenuCard.name}`}
+		style={`left: ${cardContextMenu.x}px; top: ${cardContextMenu.y}px;`}
+		tabindex="-1"
+		onclick={(event) => event.stopPropagation()}
+		onkeydown={(event) => event.stopPropagation()}
+	>
+		<button
+			type="button"
+			role="menuitem"
+			aria-haspopup="menu"
+			aria-expanded={cardContextMenu.moveOpen}
+			onclick={toggleContextMoveMenu}
+		>
+			<MoveRight size={16} />
+			<span>Move to...</span>
+		</button>
+		{#if cardContextMenu.moveOpen}
+			<div class="card-context-submenu" role="menu" aria-label="Move card to stack" tabindex="-1">
+				{#each stacks as stack (stack.id)}
+					<button
+						type="button"
+						role="menuitem"
+						disabled={stack.id === contextMenuCard.stackId}
+						onclick={() => handleContextMoveCard(stack.id)}
+					>
+						<span>{stack.name}</span>
+						{#if stack.id === contextMenuStack?.id}
+							<Check size={15} />
+						{/if}
+					</button>
+				{/each}
+			</div>
+		{/if}
+		<button type="button" role="menuitem" onclick={handleContextDuplicateCard}>
+			<Copy size={16} />
+			<span>Duplicate</span>
+		</button>
+		<button class="danger" type="button" role="menuitem" onclick={handleContextDeleteCard}>
+			<Trash2 size={16} />
+			<span>Delete</span>
+		</button>
+	</div>
 {/if}
 
 {#if loading}
@@ -1928,7 +2265,7 @@
 					<button
 						class:active={boardView === 'board'}
 						type="button"
-						onclick={() => (boardView = 'board')}
+						onclick={() => (closeCardContextMenu(), (boardView = 'board'))}
 					>
 						<Columns3 size={16} />
 						Board
@@ -1936,7 +2273,7 @@
 					<button
 						class:active={boardView === 'templates'}
 						type="button"
-						onclick={() => (boardView = 'templates')}
+						onclick={() => (closeCardContextMenu(), (boardView = 'templates'))}
 					>
 						<Settings2 size={16} />
 						Templates & Fields
@@ -1997,11 +2334,16 @@
 							onfinalize={(event) => handleCardFinalize(stack.id, event)}
 						>
 							{#each cardsByStack[stack.id] ?? [] as card (card.id)}
-								<button class="task-card" type="button" onclick={() => openCard(card)}>
+								<button
+									class="task-card"
+									type="button"
+									onclick={() => openCard(card)}
+									oncontextmenu={(event) => handleCardContextMenu(card, event)}
+								>
 									<span class="task-title">{card.name}</span>
 									{#if card.labelIds.length > 0}
 										<span class="label-strip" aria-label="Labels">
-											{#each card.labelIds as labelId}
+											{#each orderedLabelIds(card.labelIds) as labelId}
 												{@const label = labelMap.get(labelId)}
 												{#if label}
 													<span class="label-chip tiny" style={`--label-color: ${label.color}`}>
@@ -2153,7 +2495,7 @@
 								<div class="mini-section">
 									<h3>Labels</h3>
 									<div class="chip-picker">
-										{#each labels as label (label.id)}
+										{#each visibleLabels as label (label.id)}
 											<button
 												class:active={templateLabelIdsDraft.includes(label.id)}
 												class="label-toggle"
@@ -2168,7 +2510,19 @@
 									</div>
 								</div>
 								<div class="mini-section">
-									<h3>Dates</h3>
+									<div class="section-heading tight">
+										<h3>Dates</h3>
+										{#if cardElementCopyBuffer?.type === 'dates'}
+											<button
+												class="secondary-button compact"
+												type="button"
+												onclick={pasteDatesIntoTemplate}
+											>
+												<Plus size={16} />
+												Paste Dates
+											</button>
+										{/if}
+									</div>
 									{#each templateDatesDraft as date (date.id)}
 										<div class="date-row">
 											<select
@@ -2232,15 +2586,27 @@
 								<div class="mini-section">
 									<div class="section-heading tight">
 										<h3>Checklists</h3>
-										<button
-											class="icon-button filled"
-											type="button"
-											aria-label="Add checklist to template"
-											title="Add checklist"
-											onclick={addTemplateChecklist}
-										>
-											<Plus size={16} />
-										</button>
+										<div class="inline-actions">
+											{#if cardElementCopyBuffer?.type === 'checklist'}
+												<button
+													class="secondary-button compact"
+													type="button"
+													onclick={pasteChecklistIntoTemplate}
+												>
+													<Plus size={16} />
+													Paste Checklist
+												</button>
+											{/if}
+											<button
+												class="icon-button filled"
+												type="button"
+												aria-label="Add checklist to template"
+												title="Add checklist"
+												onclick={addTemplateChecklist}
+											>
+												<Plus size={16} />
+											</button>
+										</div>
 									</div>
 									<div class="checklist-list compact">
 										{#each templateChecklistsDraft as checklist, checklistIndex (checklist.id)}
@@ -2599,38 +2965,64 @@
 							Label
 						</button>
 					</form>
-					<div class="settings-list">
+					<div
+						class="settings-list label-order-list"
+						use:dragHandleZone={{
+							items: labels,
+							flipDurationMs: 130,
+							type: 'labels',
+							morphDisabled: true
+						}}
+						onconsider={handleLabelConsider}
+						onfinalize={handleLabelFinalize}
+					>
 						{#each labels as label (label.id)}
-							<article class="settings-item">
-								<input bind:value={labelDrafts[label.id].name} placeholder="Unnamed label" />
-								<div class="swatches">
-									{#each availableLabelColors as color}
+							<article class="settings-item label-settings-item">
+								<button
+									class="drag-handle"
+									type="button"
+									use:dragHandle
+									aria-label={`Move label ${label.name || 'Unnamed'}`}
+								>
+									<GripVertical size={17} />
+								</button>
+								{#if isShadowLabel(label as LabelDndItem)}
+									<span class="label-drag-preview">
+										<span class="label-chip" style={`--label-color: ${label.color}`}>
+											{labelDndSource?.name || label.name || 'Unnamed'}
+										</span>
+									</span>
+								{:else}
+									<input bind:value={labelDrafts[label.id].name} placeholder="Unnamed label" />
+									<div class="swatches">
+										{#each availableLabelColors as color}
+											<button
+												class:active={labelDrafts[label.id].color === color}
+												style={`--label-color: ${color}`}
+												type="button"
+												aria-label={`Use ${color}`}
+												onclick={() => (labelDrafts[label.id].color = color)}
+											></button>
+										{/each}
+									</div>
+									<div class="inline-actions">
 										<button
-											class:active={labelDrafts[label.id].color === color}
-											style={`--label-color: ${color}`}
+											class="secondary-button compact"
 											type="button"
-											aria-label={`Use ${color}`}
-											onclick={() => (labelDrafts[label.id].color = color)}
-										></button>
-									{/each}
-								</div>
-								<div class="inline-actions">
-									<button
-										class="secondary-button compact"
-										type="button"
-										onclick={() => handleSaveLabel(label)}
-									>
-										<Check size={15} />
-										Save
-									</button>
-									<button
-										class="icon-button danger"
-										type="button"
-										onclick={() => handleDeleteLabel(label)}
-									>
-										<Trash2 size={15} />
-									</button>
-								</div>
+											onclick={() => handleSaveLabel(label)}
+										>
+											<Check size={15} />
+											Save
+										</button>
+										<button
+											class="icon-button danger"
+											type="button"
+											onclick={() => handleDeleteLabel(label)}
+										>
+											<Trash2 size={15} />
+										</button>
+									</div>
+								{/if}
 							</article>
 						{/each}
 					</div>
@@ -2763,7 +3155,7 @@
 					<Tag size={17} />
 				</div>
 				<div class="chip-picker">
-					{#each labels as label (label.id)}
+					{#each visibleLabels as label (label.id)}
 						<button
 							class:active={cardLabelIdsDraft.includes(label.id)}
 							class="label-toggle"
@@ -2820,7 +3212,21 @@
 			<section class="dialog-section">
 				<div class="section-heading tight">
 					<h2>Dates</h2>
-					<CalendarDays size={17} />
+					<div class="inline-actions">
+						{#if cardElementCopyBuffer?.type === 'dates'}
+							<button class="secondary-button compact" type="button" onclick={pasteDatesIntoCard}>
+								<Plus size={16} />
+								Paste Dates
+							</button>
+						{/if}
+						{#if cardDatesDraft.length > 0}
+							<button class="secondary-button compact" type="button" onclick={copyCardDates}>
+								<Copy size={16} />
+								Copy Dates
+							</button>
+						{/if}
+						<CalendarDays size={17} />
+					</div>
 				</div>
 				{#each cardDatesDraft as date (date.id)}
 					<div class="date-row">
@@ -3015,6 +3421,16 @@
 					<h2>Checklists</h2>
 					<div class="inline-actions">
 						<span class="subtle-count">{cardChecklistsDraft.length}</span>
+						{#if cardElementCopyBuffer?.type === 'checklist'}
+							<button
+								class="secondary-button compact"
+								type="button"
+								onclick={pasteChecklistIntoCard}
+							>
+								<Plus size={16} />
+								Paste Checklist
+							</button>
+						{/if}
 						<button
 							class="icon-button filled"
 							type="button"
@@ -3037,9 +3453,18 @@
 										updateCardChecklistName(
 											checklist.id,
 											(event.currentTarget as HTMLInputElement).value
-										)}
+									)}
 								/>
 								<div class="field-order-actions">
+									<button
+										class="icon-button"
+										type="button"
+										aria-label={`Copy ${checklist.name || 'checklist'}`}
+										title="Copy checklist"
+										onclick={() => copyCardChecklist(checklist)}
+									>
+										<Copy size={15} />
+									</button>
 									<button
 										class="icon-button"
 										type="button"

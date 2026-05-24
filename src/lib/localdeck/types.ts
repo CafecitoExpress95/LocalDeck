@@ -86,6 +86,7 @@ export type LabelRecord = {
 	boardId: string;
 	name: string;
 	color: string;
+	position: number;
 	createdAt: ISODateString;
 	updatedAt: ISODateString;
 };

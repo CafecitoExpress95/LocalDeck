@@ -38,7 +38,7 @@ export function exportBoardArchive(
 	const cards = [...snapshot.cards].sort(byPosition);
 	const templates = [...snapshot.templates].sort(byCreated);
 	const customFields = [...snapshot.customFields].sort(byPosition);
-	const labels = [...snapshot.labels].sort(byCreated);
+	const labels = [...snapshot.labels].sort(byPosition);
 
 	const boardFile: BoardArchiveBoardFile = {
 		...snapshot.board,

@@ -1,7 +1,7 @@
 {
 	"name": "localdeck",
 	"private": true,
-	"version": "0.3.2",
+	"version": "0.3.3",
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
@@ -48,6 +48,7 @@
 	},
 	"dependencies": {
 		"@tauri-apps/api": "^2.11.0",
+		"@tauri-apps/plugin-dialog": "^2.7.1",
 		"dexie": "^4.4.2",
 		"dexie-export-import": "^4.4.0",
 		"dompurify": "^3.4.3",

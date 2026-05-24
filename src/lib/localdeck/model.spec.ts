@@ -5,9 +5,12 @@ import {
 	applyTemplateToCard,
 	cardTemplateFields,
 	createBlankTemplateRecord,
+	copyChecklistWithFreshIds,
+	copyDateEntriesWithFreshIds,
 	createChecklist,
 	createChecklistItem,
 	createTemplateFromCard,
+	checklistIndentParentId,
 	customFieldInputValue,
 	emptyCustomFieldValue,
 	normalizeCardRecord,
@@ -425,6 +428,85 @@ describe('LocalDeck v0.2 model helpers', () => {
 			createdAt: timestamp,
 			updatedAt: timestamp
 		});
+	});
+
+	it('copies date entries with fresh ids', () => {
+		expect.hasAssertions();
+
+		const [copy] = copyDateEntriesWithFreshIds([
+			{ id: 'date-1', type: 'due', label: 'Due', date: '2026-06-01' }
+		]);
+
+		expect(copy).toMatchObject({ type: 'due', label: 'Due', date: '2026-06-01' });
+		expect(copy.id).not.toBe('date-1');
+	});
+
+	it('copies one checklist with fresh ids and remapped parents', () => {
+		expect.hasAssertions();
+
+		const checklist = createChecklist('Launch', 1000, timestamp, 'checklist-1');
+		checklist.items = [
+			{ ...createChecklistItem('Parent', null, 1000, timestamp, 'item-1'), checked: true },
+			createChecklistItem('Child', 'item-1', 2000, timestamp, 'item-2')
+		];
+
+		const copy = copyChecklistWithFreshIds(checklist, 3000, '2026-05-16T10:00:00.000Z');
+		const [parent, child] = copy.items;
+
+		expect(copy).toMatchObject({
+			name: 'Launch',
+			position: 3000,
+			createdAt: '2026-05-16T10:00:00.000Z',
+			updatedAt: '2026-05-16T10:00:00.000Z'
+		});
+		expect(copy.id).not.toBe('checklist-1');
+		expect(parent).toMatchObject({
+			label: 'Parent',
+			checked: true,
+			parentId: null,
+			createdAt: '2026-05-16T10:00:00.000Z',
+			updatedAt: '2026-05-16T10:00:00.000Z'
+		});
+		expect(parent.id).not.toBe('item-1');
+		expect(child).toMatchObject({
+			label: 'Child',
+			parentId: parent.id,
+			createdAt: '2026-05-16T10:00:00.000Z',
+			updatedAt: '2026-05-16T10:00:00.000Z'
+		});
+		expect(child.id).not.toBe('item-2');
+	});
+
+	it('finds the one-level indentation parent for checklist items', () => {
+		expect.hasAssertions();
+
+		expect(
+			checklistIndentParentId(
+				{
+					items: [
+						createChecklistItem('Root A', null, 1000, timestamp, 'root-a'),
+						createChecklistItem('Root B', null, 2000, timestamp, 'root-b')
+					]
+				},
+				'root-b'
+			)
+		).toBe('root-a');
+
+		const checklist = {
+			items: [
+				createChecklistItem('Root A', null, 1000, timestamp, 'root-a'),
+				createChecklistItem('Child A', 'root-a', 2000, timestamp, 'child-a'),
+				createChecklistItem('Root B', null, 3000, timestamp, 'root-b'),
+				createChecklistItem('Child B', 'root-b', 4000, timestamp, 'child-b'),
+				createChecklistItem('Child B nested', 'child-b', 5000, timestamp, 'child-b-nested'),
+				createChecklistItem('Child C', 'root-b', 6000, timestamp, 'child-c')
+			]
+		};
+
+		expect(checklistIndentParentId(checklist, 'root-a')).toBeUndefined();
+		expect(checklistIndentParentId(checklist, 'root-b')).toBe('root-a');
+		expect(checklistIndentParentId(checklist, 'child-a')).toBeUndefined();
+		expect(checklistIndentParentId(checklist, 'child-c')).toBe('child-b');
 	});
 });
 

@@ -71,6 +71,10 @@ describe('LocalDeck .board archives', () => {
 			id: 'checklist-release-child',
 			parentId: 'checklist-release-parent'
 		});
+		expect(JSON.parse(strFromU8(archive['labels/backend.json']))).toMatchObject({
+			id: 'label-backend',
+			position: 1000
+		});
 	});
 
 	it('validates archive references and warning-level physical card placement mismatches', async () => {
@@ -160,6 +164,45 @@ describe('LocalDeck .board archives', () => {
 		}
 	});
 
+	it('normalizes legacy label archives with missing positions', async () => {
+		expect.hasAssertions();
+
+		const snapshot = createSnapshot();
+		const archive = await exportedFiles(snapshot);
+		const label = JSON.parse(strFromU8(archive['labels/backend.json'])) as Partial<LabelRecord>;
+		delete label.position;
+		archive['labels/backend.json'] = strToU8(JSON.stringify(label, null, 2));
+
+		const result = validateBoardArchive(zipSync(archive));
+
+		expect(result.valid).toBe(true);
+		expect(result.warnings.map((warning) => warning.message).join('\n')).toContain(
+			'missing position'
+		);
+		if (result.valid) {
+			expect(result.payload.labels[0]).toMatchObject({ id: 'label-backend', position: 1000 });
+		}
+	});
+
+	it('rejects label archives with invalid positions', async () => {
+		expect.hasAssertions();
+
+		const snapshot = createSnapshot();
+		const archive = await exportedFiles(snapshot);
+		const label = JSON.parse(strFromU8(archive['labels/backend.json'])) as Record<string, unknown>;
+		label.position = 'first';
+		archive['labels/backend.json'] = strToU8(JSON.stringify(label, null, 2));
+
+		const result = validateBoardArchive(zipSync(archive));
+
+		expect(result.valid).toBe(false);
+		if (!result.valid) {
+			expect(result.errors.map((error) => error.message).join('\n')).toContain(
+				'label position must be a number'
+			);
+		}
+	});
+
 	it('imports the same archive as a copy without reusing colliding child IDs', async () => {
 		expect.hasAssertions();
 
@@ -209,6 +252,7 @@ function createSnapshot(): BoardSnapshot {
 			boardId: board.id,
 			name: 'Backend',
 			color: '#314bef',
+			position: 1000,
 			createdAt: timestamp,
 			updatedAt: timestamp
 		}

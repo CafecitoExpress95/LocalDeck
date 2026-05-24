@@ -486,6 +486,7 @@ p {
 .stack-board {
 	display: flex;
 	gap: 14px;
+	height: 100%;
 	min-height: 0;
 	overflow-x: auto;
 	padding: 8px 2px 18px;
@@ -494,9 +495,12 @@ p {
 .stack-column {
 	display: grid;
 	width: 318px;
+	height: 100%;
 	min-width: 318px;
+	min-height: 0;
 	max-height: 100%;
-	grid-template-rows: auto minmax(120px, 1fr) auto;
+	grid-template-rows: auto minmax(0, 1fr) auto;
+	overflow: hidden;
 	padding: 12px;
 }
 
@@ -522,13 +526,15 @@ p {
 	display: grid;
 	align-content: start;
 	gap: 10px;
-	min-height: 120px;
+	grid-auto-rows: max-content;
+	min-height: 0;
 	overflow-y: auto;
 	padding: 2px 1px 10px;
 }
 
 .task-card {
 	display: grid;
+	align-self: start;
 	gap: 8px;
 	width: 100%;
 	min-height: 76px;
@@ -538,6 +544,7 @@ p {
 	background: var(--ld-white);
 	color: var(--ld-navy);
 	text-align: left;
+	overflow-wrap: anywhere;
 	box-shadow: 0 8px 20px rgba(17, 28, 56, 0.06);
 }
 
@@ -554,16 +561,19 @@ p {
 	flex-wrap: wrap;
 	gap: 6px;
 	align-items: center;
+	min-width: 0;
 }
 
 .label-chip,
 .label-toggle {
+	max-width: 100%;
 	border: 1px solid color-mix(in srgb, var(--label-color) 72%, black);
 	border-radius: 999px;
 	background: color-mix(in srgb, var(--label-color) 16%, white);
 	color: var(--ld-navy);
 	font-size: 0.78rem;
 	font-weight: 900;
+	overflow-wrap: anywhere;
 }
 
 .label-chip.tiny {
@@ -574,16 +584,21 @@ p {
 
 .date-pill {
 	display: inline-flex;
+	max-width: 100%;
+	min-width: 0;
+	flex-wrap: wrap;
 	align-items: center;
 	gap: 5px;
 	color: var(--ld-slate);
 	font-size: 0.76rem;
 	font-weight: 800;
+	overflow-wrap: anywhere;
 }
 
 .field-preview-list {
 	display: grid;
 	gap: 4px;
+	min-width: 0;
 	color: var(--ld-shadow);
 	font-size: 0.76rem;
 }
@@ -595,12 +610,76 @@ p {
 .comment-pill {
 	display: inline-flex;
 	width: fit-content;
+	max-width: 100%;
 	align-items: center;
 	gap: 5px;
 	border-radius: 999px;
 	color: var(--ld-slate);
 	font-size: 0.78rem;
 	font-weight: 800;
+	overflow-wrap: anywhere;
+}
+
+.card-context-menu {
+	position: fixed;
+	z-index: 20;
+	display: grid;
+	width: 240px;
+	max-width: calc(100vw - 16px);
+	gap: 4px;
+	padding: 6px;
+	border: 1px solid rgba(99, 109, 130, 0.22);
+	border-radius: 8px;
+	background: var(--ld-white);
+	box-shadow: 0 18px 42px rgba(17, 28, 56, 0.16);
+}
+
+.card-context-menu button {
+	display: flex;
+	min-height: 36px;
+	width: 100%;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	padding: 8px 10px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--ld-navy);
+	font-weight: 800;
+	text-align: left;
+}
+
+.card-context-menu button span:first-of-type {
+	min-width: 0;
+	flex: 1;
+	overflow-wrap: anywhere;
+}
+
+.card-context-menu button:hover:not(:disabled),
+.card-context-menu button:focus-visible {
+	background: var(--ld-panel);
+	outline: none;
+}
+
+.card-context-menu button:disabled {
+	color: var(--ld-slate);
+	cursor: default;
+	opacity: 0.78;
+}
+
+.card-context-menu button.danger {
+	color: #b42318;
+}
+
+.card-context-submenu {
+	display: grid;
+	gap: 2px;
+	max-height: 210px;
+	margin: 0 0 2px 26px;
+	padding-left: 6px;
+	overflow-y: auto;
+	border-left: 1px solid rgba(99, 109, 130, 0.2);
 }
 
 .add-card-form {
@@ -1018,6 +1097,42 @@ p {
 	border-radius: 8px;
 	background: var(--ld-white);
 	padding: 12px;
+}
+
+.label-settings-item {
+	grid-template-columns: auto minmax(0, 1fr);
+	align-items: center;
+}
+
+.label-settings-item .swatches,
+.label-settings-item .inline-actions {
+	grid-column: 2;
+}
+
+.drag-handle {
+	display: grid;
+	width: 24px;
+	height: 40px;
+	place-items: center;
+	align-self: stretch;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--ld-slate);
+	cursor: grab;
+	padding: 0;
+}
+
+.drag-handle:active {
+	cursor: grabbing;
+}
+
+.label-drag-preview {
+	grid-column: 2;
+	display: flex;
+	align-items: center;
+	min-height: 40px;
+	min-width: 0;
 }
 
 .field-grid {

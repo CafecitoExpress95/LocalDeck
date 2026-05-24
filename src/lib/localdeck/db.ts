@@ -121,6 +121,39 @@ export class LocalDeckDatabase extends Dexie {
 					});
 				}
 			});
+
+		this.version(5)
+			.stores({
+				boards: '&id, updatedAt',
+				stacks: '&id, boardId, [boardId+position]',
+				cards: '&id, boardId, stackId, [stackId+position]',
+				templates: '&id, boardId, [boardId+updatedAt]',
+				customFields: '&id, boardId, [boardId+position]',
+				labels: '&id, boardId, [boardId+position]',
+				preferences: '&key'
+			})
+			.upgrade(async (transaction) => {
+				const labels = await transaction.table<LabelRecord, string>('labels').toArray();
+				const labelsByBoard = new Map<string, LabelRecord[]>();
+
+				for (const label of labels) {
+					const boardLabels = labelsByBoard.get(label.boardId) ?? [];
+					boardLabels.push(label);
+					labelsByBoard.set(label.boardId, boardLabels);
+				}
+
+				for (const boardLabels of labelsByBoard.values()) {
+					const ordered = boardLabels.sort(
+						(left, right) =>
+							left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
+					);
+					for (const [index, label] of ordered.entries()) {
+						await transaction.table<LabelRecord, string>('labels').update(label.id, {
+							position: (index + 1) * 1000
+						});
+					}
+				}
+			});
 	}
 }
 

@@ -8,8 +8,10 @@ import {
 	createBlankTemplateRecord,
 	createCustomFieldOption as createModelCustomFieldOption,
 	createTemplateFromCard,
+	duplicateCardRecord,
 	normalizeCustomFieldValue,
 	normalizeCardRecord,
+	normalizeLabelRecords,
 	normalizeTemplateRecord,
 	removeCustomFieldValues,
 	removeLabelReferences
@@ -132,7 +134,7 @@ export async function loadBoard(boardId: string): Promise<BoardSnapshot | null> 
 			.map(normalizeTemplateRecord)
 			.sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
 		customFields: customFields.sort(byPosition),
-		labels: labels.sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+		labels: normalizeLabelRecords(labels).sort(byPosition)
 	};
 }
 
@@ -169,7 +171,7 @@ export async function importBoardSnapshot(
 			await db.cards.bulkAdd(snapshotPayload.cards.map(normalizeCardRecord));
 			await db.templates.bulkAdd(snapshotPayload.templates.map(normalizeTemplateRecord));
 			await db.customFields.bulkAdd(snapshotPayload.customFields);
-			await db.labels.bulkAdd(snapshotPayload.labels);
+			await db.labels.bulkAdd(normalizeLabelRecords(snapshotPayload.labels));
 			await db.preferences.put({ key: 'lastBoardId', value: board.id });
 		}
 	);
@@ -377,6 +379,68 @@ export async function deleteCard(cardId: string) {
 		await db.cards.delete(cardId);
 		await db.boards.update(card.boardId, { updatedAt: now() });
 	});
+}
+
+export async function moveCardToStack(cardId: string, stackId: string) {
+	const [card, stack] = await Promise.all([db.cards.get(cardId), db.stacks.get(stackId)]);
+	if (!card || !stack || card.boardId !== stack.boardId) return;
+	if (card.stackId === stackId) return normalizeCardRecord(card);
+
+	const timestamp = now();
+	const [sourceCards, targetCards] = await Promise.all([
+		db.cards.where('stackId').equals(card.stackId).toArray(),
+		db.cards.where('stackId').equals(stackId).toArray()
+	]);
+	const movedCard = { ...normalizeCardRecord(card), stackId, updatedAt: timestamp };
+	const sourceUpdates = normalizePositions(
+		sourceCards.filter((item) => item.id !== cardId).sort(byPosition)
+	).map((item) => ({ ...item, updatedAt: timestamp }));
+	const targetUpdates = normalizePositions([
+		...targetCards.filter((item) => item.id !== cardId).sort(byPosition),
+		movedCard
+	]).map((item) => ({ ...item, updatedAt: timestamp }));
+	const updates = [...sourceUpdates, ...targetUpdates];
+
+	await db.transaction('rw', db.cards, db.boards, async () => {
+		await db.cards.bulkPut(updates);
+		await db.boards.update(card.boardId, { updatedAt: timestamp });
+	});
+
+	return targetUpdates.find((item) => item.id === cardId);
+}
+
+export async function duplicateCard(cardId: string) {
+	const card = await db.cards.get(cardId);
+	if (!card) return;
+
+	const timestamp = now();
+	const stackCards = (await db.cards.where('stackId').equals(card.stackId).toArray())
+		.map(normalizeCardRecord)
+		.sort(byPosition);
+	const sourceIndex = stackCards.findIndex((item) => item.id === cardId);
+	if (sourceIndex < 0) return;
+
+	const duplicate = duplicateCardRecord(stackCards[sourceIndex], 0, timestamp);
+	const nextStackCards = [
+		...stackCards.slice(0, sourceIndex + 1),
+		duplicate,
+		...stackCards.slice(sourceIndex + 1)
+	];
+	const stackUpdates = nextStackCards.map((item, index) => {
+		const position = spacedPosition(index);
+		return {
+			...item,
+			position,
+			updatedAt: item.id === duplicate.id || item.position !== position ? timestamp : item.updatedAt
+		};
+	});
+
+	await db.transaction('rw', db.cards, db.boards, async () => {
+		await db.cards.bulkPut(stackUpdates);
+		await db.boards.update(card.boardId, { updatedAt: timestamp });
+	});
+
+	return stackUpdates.find((item) => item.id === duplicate.id);
 }
 
 export async function reorderCards(boardId: string, cards: CardRecord[]) {
@@ -660,11 +724,15 @@ export async function deleteCustomField(fieldId: string) {
 
 export async function createLabel(boardId: string, name: string, color?: string) {
 	const timestamp = now();
+	const existingLabels = normalizeLabelRecords(
+		await db.labels.where('boardId').equals(boardId).toArray()
+	);
 	const label: LabelRecord = {
 		id: nanoid(),
 		boardId,
 		name: name.trim(),
 		color: color ?? localdeckLabelColors[0],
+		position: nextPosition(existingLabels),
 		createdAt: timestamp,
 		updatedAt: timestamp
 	};
@@ -675,6 +743,18 @@ export async function createLabel(boardId: string, name: string, color?: string)
 	});
 
 	return label;
+}
+
+export async function reorderLabels(boardId: string, labels: LabelRecord[]) {
+	const timestamp = now();
+	const updates = normalizePositions(labels).map((label) => ({ ...label, updatedAt: timestamp }));
+
+	await db.transaction('rw', db.labels, db.boards, async () => {
+		await db.labels.bulkPut(updates);
+		await db.boards.update(boardId, { updatedAt: timestamp });
+	});
+
+	return updates;
 }
 
 export async function updateLabel(
@@ -833,6 +913,10 @@ function isTemplateStructureUpdate(
 		changes.customFields !== undefined ||
 		changes.customFieldOrder !== undefined
 	);
+}
+
+function nextPosition<T extends { position?: number }>(items: T[]) {
+	return items.reduce((position, item) => Math.max(position, item.position ?? 0), 0) + 1000;
 }
 
 async function resolveTemplateForBoard(boardId: string, templateId?: string | null) {
